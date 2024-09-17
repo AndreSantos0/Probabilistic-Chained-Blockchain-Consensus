@@ -1,18 +1,17 @@
 mod domain;
+mod my_node;
+mod streamlet;
 
 use csv::ReaderBuilder;
 use std::env;
 use std::error::Error;
 use std::fs::File;
-use serde::de::DeserializeOwned;
 use crate::domain::environment::Environment;
 use crate::domain::node::Node;
 use chrono::{Local, Timelike};
 use tokio::time::{sleep, Duration};
+use crate::my_node::MyNode;
 
-fn my_node_start() {
-    println!("Task executed at {}", Local::now().format("%H:%M:%S"));
-}
 
 #[tokio::main]
 async fn main() {
@@ -20,25 +19,29 @@ async fn main() {
     match get_environment(args) {
         Ok(env) => {
             println!("Successfully read environment: {:?}", env);
+
+            let mut my_node = MyNode::new(env);
+
+            let now = Local::now();
+            let mut next_hour = now.hour();
+            let mut minute = now.minute() + 1;
+
+            if minute >= 60 {
+                next_hour += 1;
+                minute -= 60;
+            }
+
+            println!("Starting at {}:{}", next_hour, minute);
+
+            schedule_at_specific_time(next_hour, minute, || {
+                my_node.start()
+            }).await;
         },
         Err(err) => {
             eprintln!("Error: {}", err);
             return;
         }
     }
-
-    let now = Local::now();
-    let mut next_hour = now.hour();
-    let mut minute = now.minute() + 1;
-
-    if minute >= 60 {
-        next_hour += 1;
-        minute -= 60;
-    }
-
-    println!("Starting at {}:{}", next_hour, minute);
-
-    schedule_at_specific_time(next_hour, minute, my_node_start).await;
 }
 
 fn get_environment(args: Vec<String>) -> Result<Environment, Box<dyn Error>> {
@@ -46,7 +49,7 @@ fn get_environment(args: Vec<String>) -> Result<Environment, Box<dyn Error>> {
         return Err("Specify Node Id and nodes´ CSV file [Streamlet_Rust.exe 1 nodes.csv]".into());
     }
 
-    let my_id = args[1].parse::<i32>()?;
+    let my_id = args[1].parse::<u32>()?;
     let file_path = &args[2];
     let nodes = read_nodes_from_csv(file_path)?;
 
@@ -73,7 +76,7 @@ fn read_nodes_from_csv(file_path: &str) -> Result<Vec<Node>, Box<dyn Error>> {
     Ok(nodes)
 }
 
-async fn schedule_at_specific_time(hour: u32, minute: u32, task: impl Fn() -> ()) {
+async fn schedule_at_specific_time(hour: u32, minute: u32, mut task: impl FnMut() -> ()) {
     let now = Local::now();
     let current_hour = now.hour();
     let current_minute = now.minute();
