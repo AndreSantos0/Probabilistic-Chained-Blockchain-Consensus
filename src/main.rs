@@ -1,15 +1,16 @@
 mod domain;
 mod my_node;
-mod streamlet;
+mod blockchain;
+mod transaction_generator;
 
 use csv::ReaderBuilder;
-use std::env;
+use std::{env, thread};
 use std::error::Error;
 use std::fs::File;
 use crate::domain::environment::Environment;
 use crate::domain::node::Node;
 use chrono::{Local, Timelike};
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration};
 use crate::my_node::MyNode;
 
 
@@ -20,7 +21,7 @@ async fn main() {
         Ok(env) => {
             println!("Successfully read environment: {:?}", env);
 
-            let mut my_node = MyNode::new(env);
+            let my_node = MyNode::new(env);
 
             let now = Local::now();
             let mut next_hour = now.hour();
@@ -32,10 +33,8 @@ async fn main() {
             }
 
             println!("Starting at {}:{}", next_hour, minute);
-
-            schedule_at_specific_time(next_hour, minute, || {
-                my_node.start()
-            }).await;
+            wait_until_specific_time(next_hour, minute);
+            my_node.start_streamlet();
         },
         Err(err) => {
             eprintln!("Error: {}", err);
@@ -76,7 +75,7 @@ fn read_nodes_from_csv(file_path: &str) -> Result<Vec<Node>, Box<dyn Error>> {
     Ok(nodes)
 }
 
-async fn schedule_at_specific_time(hour: u32, minute: u32, mut task: impl FnMut() -> ()) {
+fn wait_until_specific_time(hour: u32, minute: u32) {
     let now = Local::now();
     let current_hour = now.hour();
     let current_minute = now.minute();
@@ -90,6 +89,5 @@ async fn schedule_at_specific_time(hour: u32, minute: u32, mut task: impl FnMut(
     let total_seconds_left = hours_left * 3600 + minutes_left * 60 - current_second as u64;
 
     let duration = Duration::from_secs(total_seconds_left);
-    sleep(duration).await;
-    task();
+    thread::sleep(duration);
 }
