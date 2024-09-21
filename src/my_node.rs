@@ -46,7 +46,7 @@ impl MyNode {
 
     pub fn new(environment: Environment) -> Self {
         let address = format!("{}:{}", environment.my_node.host, environment.my_node.port);
-        let listener = TcpListener::bind(address).expect("Failed to bind to address");
+        let listener = TcpListener::bind(address).expect("Failed to bind to address"); //TODO()
 
         MyNode {
             environment,
@@ -113,7 +113,7 @@ impl MyNode {
     fn listen_for_messages(&self, message_queue_sender: Sender<Message>) {
         let sender = Arc::new(message_queue_sender);
         for node_socket in self.node_sockets.iter() {
-            let mut socket = node_socket.socket.try_clone().expect("Failed to clone socket");
+            let mut socket = node_socket.socket.try_clone().expect("Failed to clone socket"); //TODO()
             let sender = Arc::clone(&sender);
             thread::spawn(move || {
                 loop {
@@ -177,8 +177,8 @@ impl MyNode {
                                     self.blocks.insert(propose.content.epoch, true);
                                     let message = Message::Propose(Propose { content: propose.content.clone(), sender: self.environment.my_node.id });
                                     self.send_message_to_all_nodes(message);
-                                    let longest_chain_length = self.blockchain.get_longest_chain_length();
-                                    if propose.content.length > longest_chain_length {
+                                    let length = self.blockchain.get_longest_chain_length();
+                                    if propose.content.length > length {
                                         let vote = Message::Vote(Vote { content: propose.content, sender: self.environment.my_node.id });
                                         self.send_message_to_all_nodes(vote);
                                     }
@@ -189,7 +189,7 @@ impl MyNode {
                                 if !nodes_voted.contains(&vote.sender) {
                                     nodes_voted.push(vote.sender);
                                     if nodes_voted.len() >= ((self.environment.nodes.len() as u32) / 2 + 1) as usize {
-                                        // self.blockchain.add_block(vote.content); //todo
+                                        self.blockchain.add_block(vote.content.clone());
                                     }
                                     let message = Message::Vote(vote);
                                     self.send_message_to_all_nodes(message);
@@ -236,7 +236,7 @@ impl MyNode {
         let length = serialized_bytes.len() as u32;
         let length_bytes = length.to_be_bytes();
         for server_socket in self.server_sockets.iter() {
-            let mut socket = server_socket.try_clone().expect("Failed to clone socket");
+            let mut socket = server_socket.try_clone().expect("Failed to clone socket"); //TODO()
             if let Err(e) = socket.write_all(&length_bytes) {
                 eprintln!("Failed to send message to socket: {}", e);
                 continue;
