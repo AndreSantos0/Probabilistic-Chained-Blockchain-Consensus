@@ -1,5 +1,5 @@
 
-#[derive(Clone, serde::Serialize,serde::Deserialize,Debug)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Transaction {
     pub sender: u32,
     pub id: u32,

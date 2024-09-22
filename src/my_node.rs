@@ -24,16 +24,11 @@ const CONFUSION_DURATION: u32 = 0;
 const MESSAGE_LENGTH_BYTES: usize = 4;
 
 
-pub struct NodeSocket {
-    pub id: u32,
-    pub socket: TcpStream,
-}
-
 pub struct MyNode {
     environment: Environment,
     listener: TcpListener,
     server_sockets: Vec<TcpStream>,
-    node_sockets: Vec<NodeSocket>,
+    node_sockets: Vec<TcpStream>,
     epoch: Arc<AtomicU32>,
     is_new_epoch: Arc<AtomicBool>,
     blockchain: Blockchain,
@@ -47,6 +42,7 @@ impl MyNode {
     pub fn new(environment: Environment) -> Self {
         let address = format!("{}:{}", environment.my_node.host, environment.my_node.port);
         let listener = TcpListener::bind(address).expect("Failed to bind to address"); //TODO()
+        let my_node_id = environment.my_node.id;
 
         MyNode {
             environment,
@@ -55,7 +51,7 @@ impl MyNode {
             node_sockets: Vec::new(),
             epoch: Arc::new(AtomicU32::new(INITIAL_EPOCH)),
             is_new_epoch: Arc::new(AtomicBool::new(false)),
-            blockchain: Blockchain::new(),
+            blockchain: Blockchain::new(my_node_id),
             transaction_generator: TransactionGenerator::new(),
             blocks: HashMap::new(),
             votes_ids: HashMap::new(),
@@ -66,7 +62,7 @@ impl MyNode {
         for node in self.environment.nodes.iter() {
             let address = format!("{}:{}", node.host, node.port);
             match TcpStream::connect(address) {
-                Ok(socket) => self.node_sockets.push(NodeSocket { id: node.id, socket }),
+                Ok(stream) => self.node_sockets.push(stream),
                 Err(e) => eprintln!("[Node {}] Failed to connect to node {}: {}", self.environment.my_node.id, node.id, e),
             }
         }
@@ -113,7 +109,7 @@ impl MyNode {
     fn listen_for_messages(&self, message_queue_sender: Sender<Message>) {
         let sender = Arc::new(message_queue_sender);
         for node_socket in self.node_sockets.iter() {
-            let mut socket = node_socket.socket.try_clone().expect("Failed to clone socket"); //TODO()
+            let mut socket = node_socket.try_clone().expect("Failed to clone socket");
             let sender = Arc::clone(&sender);
             thread::spawn(move || {
                 loop {
@@ -188,8 +184,8 @@ impl MyNode {
                                 let nodes_voted = self.votes_ids.entry(vote.content.epoch).or_insert_with(Vec::new);
                                 if !nodes_voted.contains(&vote.sender) {
                                     nodes_voted.push(vote.sender);
-                                    if nodes_voted.len() >= ((self.environment.nodes.len() as u32) / 2 + 1) as usize {
-                                        self.blockchain.add_block(vote.content.clone());
+                                    if nodes_voted.len() == ((self.environment.nodes.len() as u32) / 2 + 1) as usize {
+                                        self.blockchain.add_block(&vote.content);
                                     }
                                     let message = Message::Vote(vote);
                                     self.send_message_to_all_nodes(message);
@@ -223,7 +219,7 @@ impl MyNode {
     fn send_message_to_all_nodes(&self, message: Message) {
         let serialized_message = match to_string(&message) {
             Ok(json) => {
-                println!("Serialized: {}", json);
+                //println!("Serialized: {}", json);
                 json
             },
             Err(e) => {
