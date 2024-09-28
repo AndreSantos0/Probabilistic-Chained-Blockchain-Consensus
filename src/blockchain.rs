@@ -40,7 +40,7 @@ impl Blockchain {
         self.nodes.iter().find(|blockchain_node| Some(Blockchain::hash(blockchain_node)) == block.hash)
     }
 
-    pub fn add_block(&mut self, block: &Block) {
+    pub fn add_block(&mut self, block: &Block) -> bool {
         match self.find_previous_block(&block) {
             Some(_) => {
                 self.nodes.push(block.clone());
@@ -51,15 +51,20 @@ impl Blockchain {
                         self.nodes.push(delayed_block.clone());
                         if self.is_finalize(&delayed_block) {
                             self.finalize(&delayed_block);
-                            return;
+                            return true
                         }
                     }
                 }
                 if self.is_finalize(&block) {
-                    self.finalize(&block)
+                    self.finalize(&block);
+                    return true
                 }
+                false
             },
-            None => self.delayed.push(block.clone())
+            None => {
+                self.delayed.push(block.clone());
+                false
+            }
         }
     }
 
@@ -117,17 +122,27 @@ impl Blockchain {
         self.nodes.retain(|block| block.epoch == node.epoch || block.epoch == node.epoch - 1);
     }
 
-    pub fn print(&self) {
-        let curr_length = self.get_longest_chain_length();
-        let edge_nodes: Vec<Block> = self.nodes.iter().filter(|blockchain_node| blockchain_node.length == curr_length).cloned().collect();
-        for node in edge_nodes {
-            let mut curr_node = &node;
-            print!("[Epoch: {} | Length: {}]", node.epoch, node.length);
-            while let Some(previous) = self.find_previous_block(curr_node) {
-                curr_node = previous;
-                print!(" <- [Epoch: {} | Length: {}]", curr_node.epoch, curr_node.length);
-            }
-            print!("\n");
+    fn print_blockchain(&self, node: &Block, n_tabs: usize) {
+        if n_tabs == 1 {
+            println!("[Epoch: {} | Length: {}]", node.epoch, node.length);
         }
+
+        let childs: Vec<Block> = self.nodes.iter().filter(|child| {
+            match self.find_previous_block(child) {
+                None => false,
+                Some(previous) => { previous.epoch == node.epoch }
+            }
+        }).cloned().collect();
+
+        let tabs = "\t".repeat(n_tabs);
+        for child in childs {
+            println!("{}[Epoch: {} | Length: {}]", tabs, child.epoch, child.length);
+            self.print_blockchain(&child, n_tabs + 1);
+        }
+    }
+
+    pub fn print(&self) {
+        let genesis = self.nodes.iter().min_by_key(|node| node.epoch).unwrap();
+        self.print_blockchain(genesis, 1)
     }
 }

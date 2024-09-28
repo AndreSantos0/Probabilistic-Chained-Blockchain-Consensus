@@ -18,9 +18,9 @@ use crate::transaction_generator::TransactionGenerator;
 
 const SEED: u64 = 0xFF6DA736EA;
 const INITIAL_EPOCH: u32 = 0;
-const EPOCH_TIME: u64 = 1;
-const CONFUSION_START: u32 = 0;
-const CONFUSION_DURATION: u32 = 0;
+const EPOCH_TIME: u64 = 3;
+const CONFUSION_START: u32 = 1;
+const CONFUSION_DURATION: u32 = 2;
 const MESSAGE_LENGTH_BYTES: usize = 4;
 
 
@@ -118,16 +118,16 @@ impl MyNode {
                         Ok(_) => {}
                         Err(e) => {
                             println!("Error reading length bytes: {}", e);
-                            continue
+                            return;
                         }
                     };
                     let length = u32::from_be_bytes(length_bytes);
                     let mut buffer = vec![0; length as usize];
                     match socket.read_exact(&mut buffer) {
                         Ok(_) => {}
-                        Err(_) => {
-                            println!("Error reading message bytes");
-                            continue
+                        Err(e) => {
+                            println!("Error reading message bytes: {}", e);
+                            return;
                         }
                     };
                     match from_slice::<Message>(&buffer) {
@@ -139,6 +139,7 @@ impl MyNode {
                         }
                         Err(e) => {
                             eprintln!("Failed to deserialize message: {}", e);
+                            return;
                         }
                     }
                 }
@@ -185,7 +186,11 @@ impl MyNode {
                                 if !nodes_voted.contains(&vote.sender) {
                                     nodes_voted.push(vote.sender);
                                     if nodes_voted.len() == ((self.environment.nodes.len() as u32) / 2 + 1) as usize {
-                                        self.blockchain.add_block(&vote.content);
+                                        let finalization = self.blockchain.add_block(&vote.content);
+                                        if finalization {
+                                            self.blocks.retain(|epoch, _| epoch >= &vote.content.epoch);
+                                            self.votes_ids.retain(|epoch, _| epoch >= &vote.content.epoch)
+                                        }
                                     }
                                     let message = Message::Vote(vote);
                                     self.send_message_to_all_nodes(message);
@@ -212,6 +217,7 @@ impl MyNode {
         let epoch = self.epoch.load(Ordering::SeqCst);
         let transactions = self.transaction_generator.generate(self.environment.my_node.id);
         let block = self.blockchain.get_next_block(epoch, transactions);
+        //println!("Proposed e:{} l:{}", block.epoch, block.length);
         let message = Message::Propose(Propose { content: block, sender: self.environment.my_node.id });
         self.send_message_to_all_nodes(message)
     }
@@ -219,7 +225,6 @@ impl MyNode {
     fn send_message_to_all_nodes(&self, message: Message) {
         let serialized_message = match to_string(&message) {
             Ok(json) => {
-                //println!("Serialized: {}", json);
                 json
             },
             Err(e) => {
