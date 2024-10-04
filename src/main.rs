@@ -1,18 +1,19 @@
+use std::{env, thread};
+use std::error::Error;
+use std::fs::File;
+
+use chrono::{Local, Timelike};
+use csv::ReaderBuilder;
+use tokio::time::Duration;
+
+use crate::domain::environment::Environment;
+use crate::domain::node::Node;
+use crate::my_node::MyNode;
+
 mod domain;
 mod my_node;
 mod blockchain;
 mod transaction_generator;
-
-use csv::ReaderBuilder;
-use std::{env, thread};
-use std::error::Error;
-use std::fs::File;
-use crate::domain::environment::Environment;
-use crate::domain::node::Node;
-use chrono::{Local, Timelike};
-use tokio::time::{Duration};
-use crate::my_node::MyNode;
-
 
 #[tokio::main]
 async fn main() {
@@ -34,11 +35,10 @@ async fn main() {
 
             println!("Starting at {}:{}", next_hour, minute);
             wait_until_specific_time(next_hour, minute);
-            my_node.start_streamlet();
+            my_node.start_streamlet().await.expect("TODO: panic message");
         },
         Err(err) => {
             eprintln!("Error: {}", err);
-            return;
         }
     }
 }

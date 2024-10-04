@@ -1,15 +1,16 @@
 use std::collections::HashMap;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
-use std::thread;
 use std::time::Duration;
 
 use rand::{Rng, SeedableRng};
 use rand::prelude::StdRng;
 use serde_json::{from_slice, to_string};
+use tokio::{io, time};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::blockchain::Blockchain;
 use crate::domain::environment::Environment;
@@ -19,16 +20,13 @@ use crate::transaction_generator::TransactionGenerator;
 const SEED: u64 = 0xFF6DA736EA;
 const INITIAL_EPOCH: u32 = 0;
 const EPOCH_TIME: u64 = 3;
-const CONFUSION_START: u32 = 1;
-const CONFUSION_DURATION: u32 = 2;
+const CONFUSION_START: u32 = 0;
+const CONFUSION_DURATION: u32 = 0;
 const MESSAGE_LENGTH_BYTES: usize = 4;
 
 
 pub struct MyNode {
     environment: Environment,
-    listener: TcpListener,
-    server_sockets: Vec<TcpStream>,
-    node_sockets: Vec<TcpStream>,
     epoch: Arc<AtomicU32>,
     is_new_epoch: Arc<AtomicBool>,
     blockchain: Blockchain,
@@ -40,15 +38,9 @@ pub struct MyNode {
 impl MyNode {
 
     pub fn new(environment: Environment) -> Self {
-        let address = format!("{}:{}", environment.my_node.host, environment.my_node.port);
-        let listener = TcpListener::bind(address).expect("Failed to bind to address"); //TODO()
         let my_node_id = environment.my_node.id;
-
         MyNode {
             environment,
-            listener,
-            server_sockets: Vec::new(),
-            node_sockets: Vec::new(),
             epoch: Arc::new(AtomicU32::new(INITIAL_EPOCH)),
             is_new_epoch: Arc::new(AtomicBool::new(false)),
             blockchain: Blockchain::new(my_node_id),
@@ -58,96 +50,67 @@ impl MyNode {
         }
     }
 
-    fn connect(&mut self) {
+    async fn connect(&mut self) -> Vec<TcpStream> {
+        let mut connections = Vec::new();
         for node in self.environment.nodes.iter() {
             let address = format!("{}:{}", node.host, node.port);
-            match TcpStream::connect(address) {
-                Ok(stream) => self.node_sockets.push(stream),
-                Err(e) => eprintln!("[Node {}] Failed to connect to node {}: {}", self.environment.my_node.id, node.id, e),
+            match TcpStream::connect(address).await {
+                Ok(stream) => connections.push(stream),
+                Err(e) => eprintln!("[Node {}] Failed to connect to Node {}: {}", self.environment.my_node.id, node.id, e),
             }
         }
+        connections
     }
 
-    fn accept_connections(&mut self) {
+    async fn accept_connections(&mut self, listener: TcpListener, sender: Arc<Sender<Message>>) {
         let mut accepted = 0;
-        let nodes_count = self.environment.nodes.len();
-        while accepted < nodes_count {
-            match self.listener.accept() {
-                Ok((stream, _addr)) => self.server_sockets.push(stream),
+        let n_nodes = self.environment.nodes.len();
+        while accepted < n_nodes {
+            match listener.accept().await {
+                Ok((stream, _addr)) => {
+                    let sender = Arc::clone(&sender);
+                    tokio::spawn(async {
+                        handle_connection(stream, sender).await
+                    });
+                },
                 Err(e) => eprintln!("[Node {}] Failed to accept a connection: {}", self.environment.my_node.id, e)
             }
             accepted += 1;
         }
     }
 
-    pub fn start_streamlet(mut self) {
-        self.connect();
-        self.accept_connections();
-        let (sender, receiver): (Sender<Message>, Receiver<Message>) = mpsc::channel();
+    pub async fn start_streamlet(mut self) -> io::Result<()> {
+        let address = format!("{}:{}", self.environment.my_node.host, self.environment.my_node.port);
+        let listener = TcpListener::bind(address).await?;
+        let (tx, rx) = mpsc::channel::<Message>(50);
+        let sender = Arc::new(tx);
+
+        let mut connections = self.connect().await;
+        self.accept_connections(listener, sender).await;
         self.start_epoch_counter();
-        self.listen_for_messages(sender);
-        self.execute_protocol(receiver);
+        self.execute_protocol(rx, &mut connections).await;
+        Ok(())
     }
 
     fn start_epoch_counter(&self) {
         let epoch_counter = self.epoch.clone();
         let is_new_epoch = self.is_new_epoch.clone();
-        thread::spawn(move || {
+        tokio::spawn(async move {
+            let mut interval = time::interval(Duration::from_secs(EPOCH_TIME));
             loop {
-                thread::sleep(Duration::from_secs(EPOCH_TIME));
+                interval.tick().await;
                 epoch_counter.fetch_add(1, Ordering::SeqCst);
                 loop {
                     match is_new_epoch.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst) {
                         Ok(_) => break,
-                        Err(_) => { }
+                        Err(_) => {}
                     }
                 }
             }
         });
     }
 
-    fn listen_for_messages(&self, message_queue_sender: Sender<Message>) {
-        let sender = Arc::new(message_queue_sender);
-        for node_socket in self.node_sockets.iter() {
-            let mut socket = node_socket.try_clone().expect("Failed to clone socket");
-            let sender = Arc::clone(&sender);
-            thread::spawn(move || {
-                loop {
-                    let mut length_bytes = [0; MESSAGE_LENGTH_BYTES];
-                    match socket.read_exact(&mut length_bytes) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            println!("Error reading length bytes: {}", e);
-                            return;
-                        }
-                    };
-                    let length = u32::from_be_bytes(length_bytes);
-                    let mut buffer = vec![0; length as usize];
-                    match socket.read_exact(&mut buffer) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            println!("Error reading message bytes: {}", e);
-                            return;
-                        }
-                    };
-                    match from_slice::<Message>(&buffer) {
-                        Ok(message) => {
-                            match sender.send(message) {
-                                Ok(..) => continue,
-                                Err(..) => return
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to deserialize message: {}", e);
-                            return;
-                        }
-                    }
-                }
-            });
-        }
-    }
-
-    fn execute_protocol(&mut self, message_queue_receiver: Receiver<Message>) {
+    async fn execute_protocol(&mut self, mut message_queue_receiver: Receiver<Message>, connections: &mut Vec<TcpStream>) {
         let mut rng = StdRng::seed_from_u64(SEED);
         loop {
             let epoch = self.epoch.load(Ordering::SeqCst);
@@ -159,7 +122,7 @@ impl MyNode {
                     println!("Leader is node {} | Epoch: {}", leader, epoch);
                     self.blockchain.print();
                     if leader == self.environment.my_node.id {
-                        self.propose();
+                        self.propose(connections).await;
                     }
                 }
                 Err(_) => {}
@@ -173,11 +136,11 @@ impl MyNode {
                                 if !self.blocks.contains_key(&propose.content.epoch) {
                                     self.blocks.insert(propose.content.epoch, true);
                                     let message = Message::Propose(Propose { content: propose.content.clone(), sender: self.environment.my_node.id });
-                                    self.send_message_to_all_nodes(message);
+                                    send_message_to_all_nodes(connections, message).await;
                                     let length = self.blockchain.get_longest_chain_length();
                                     if propose.content.length > length {
                                         let vote = Message::Vote(Vote { content: propose.content, sender: self.environment.my_node.id });
-                                        self.send_message_to_all_nodes(vote);
+                                        send_message_to_all_nodes(connections, vote).await;
                                     }
                                 }
                             },
@@ -193,7 +156,7 @@ impl MyNode {
                                         }
                                     }
                                     let message = Message::Vote(vote);
-                                    self.send_message_to_all_nodes(message);
+                                    send_message_to_all_nodes(connections, message).await;
                                 }
                             },
                         }
@@ -213,37 +176,69 @@ impl MyNode {
         }
     }
 
-    fn propose(&mut self) {
+    async fn propose(&mut self, connections: &mut Vec<TcpStream>) {
         let epoch = self.epoch.load(Ordering::SeqCst);
         let transactions = self.transaction_generator.generate(self.environment.my_node.id);
         let block = self.blockchain.get_next_block(epoch, transactions);
-        //println!("Proposed e:{} l:{}", block.epoch, block.length);
         let message = Message::Propose(Propose { content: block, sender: self.environment.my_node.id });
-        self.send_message_to_all_nodes(message)
+        send_message_to_all_nodes(connections, message).await;
     }
+}
 
-    fn send_message_to_all_nodes(&self, message: Message) {
-        let serialized_message = match to_string(&message) {
-            Ok(json) => {
-                json
-            },
+async fn send_message_to_all_nodes(connections: &mut Vec<TcpStream>, message: Message) {
+    let serialized_message = match to_string(&message) {
+        Ok(json) => {
+            json
+        },
+        Err(e) => {
+            eprintln!("Failed to serialize message: {}", e);
+            return;
+        }
+    };
+
+    let serialized_bytes = serialized_message.as_bytes();
+    let length = serialized_bytes.len() as u32;
+    let length_bytes = length.to_be_bytes();
+    for stream in connections.iter_mut() {
+        if let Err(e) = stream.write_all(&length_bytes).await {
+            eprintln!("Failed to send message to socket: {}", e);
+            continue;
+        }
+        if let Err(e) = stream.write_all(serialized_bytes).await {
+            eprintln!("Failed to send message to socket: {}", e);
+        }
+    }
+}
+
+async fn handle_connection(mut socket: TcpStream, sender: Arc<Sender<Message>>) {
+    loop {
+        let mut length_bytes = [0; MESSAGE_LENGTH_BYTES];
+        match socket.read_exact(&mut length_bytes).await {
+            Ok(_) => {}
             Err(e) => {
-                eprintln!("Failed to serialize message: {}", e);
+                println!("Error reading length bytes: {}", e);
                 return;
             }
         };
-
-        let serialized_bytes = serialized_message.as_bytes();
-        let length = serialized_bytes.len() as u32;
-        let length_bytes = length.to_be_bytes();
-        for server_socket in self.server_sockets.iter() {
-            let mut socket = server_socket.try_clone().expect("Failed to clone socket"); //TODO()
-            if let Err(e) = socket.write_all(&length_bytes) {
-                eprintln!("Failed to send message to socket: {}", e);
-                continue;
+        let length = u32::from_be_bytes(length_bytes);
+        let mut buffer = vec![0; length as usize];
+        match socket.read_exact(&mut buffer).await {
+            Ok(_) => {}
+            Err(e) => {
+                println!("Error reading message bytes: {}", e);
+                return;
             }
-            if let Err(e) = socket.write_all(serialized_bytes) {
-                eprintln!("Failed to send message to socket: {}", e);
+        };
+        match from_slice::<Message>(&buffer) {
+            Ok(message) => {
+                match sender.send(message).await {
+                    Ok(..) => continue,
+                    Err(..) => return
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to deserialize message: {}", e);
+                return;
             }
         }
     }
