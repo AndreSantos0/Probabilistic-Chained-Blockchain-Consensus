@@ -5,5 +5,5 @@ use serde::Deserialize;
 pub struct Node {
     pub id: u32,
     pub host: String,
-    pub port: u32,
+    pub port: u16,
 }

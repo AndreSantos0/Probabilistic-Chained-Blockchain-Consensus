@@ -108,7 +108,6 @@ impl Blockchain {
             to_finalize.push(curr_node)
         }
         to_finalize.reverse();
-        to_finalize.pop();
 
         let mut file = OpenOptions::new()
             .write(true)
