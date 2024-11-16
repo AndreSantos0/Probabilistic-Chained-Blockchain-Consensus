@@ -1,7 +1,5 @@
-use serde::Deserialize;
 
-
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, serde::Deserialize, Clone)]
 pub struct Node {
     pub id: u32,
     pub host: String,

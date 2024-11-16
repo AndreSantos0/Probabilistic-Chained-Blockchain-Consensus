@@ -1,4 +1,4 @@
-use crate::domain::block::Block;
+use shared::domain::block::Block;
 
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -15,7 +15,7 @@ pub struct Vote {
 
 #[derive(serde::Serialize,serde::Deserialize, Debug)]
 #[serde(tag = "type", content = "data")]
-pub enum Message {
+pub enum StreamletMessage {
     Propose(Propose),
     Vote(Vote),
 }

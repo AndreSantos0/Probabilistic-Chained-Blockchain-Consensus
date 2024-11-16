@@ -2,9 +2,8 @@ use std::fs::{OpenOptions};
 use std::io::Write;
 use serde_json::to_string;
 use sha1::{Digest, Sha1};
-
-use crate::domain::block::Block;
-use crate::domain::transaction::Transaction;
+use shared::domain::block::Block;
+use shared::domain::transaction::Transaction;
 
 const GENESIS_EPOCH: u32 = 0;
 const GENESIS_LENGTH: u32 = 0;
@@ -19,6 +18,7 @@ pub struct Blockchain {
 }
 
 impl Blockchain {
+
     pub fn new(my_node_id: u32) -> Self {
         let mut block_nodes = Vec::new();
         block_nodes.push(Self::genesis_block());
