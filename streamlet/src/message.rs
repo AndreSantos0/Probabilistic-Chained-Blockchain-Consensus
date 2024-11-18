@@ -1,16 +1,13 @@
-use shared::domain::block::Block;
-
+use crate::block::StreamletBlock;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct Propose {
-    pub content: Block,
-    pub sender: u32,
+    pub content: StreamletBlock,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct Vote {
-    pub content: Block,
-    pub sender: u32,
+    pub content: StreamletBlock,
 }
 
 #[derive(serde::Serialize,serde::Deserialize, Debug)]

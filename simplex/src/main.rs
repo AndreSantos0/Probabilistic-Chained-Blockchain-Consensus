@@ -1,6 +1,7 @@
 mod node;
 mod blockchain;
 mod message;
+mod block;
 
 use std::env;
 use chrono::{Local, Timelike};

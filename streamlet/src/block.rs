@@ -1,18 +1,18 @@
-use crate::domain::transaction::Transaction;
+use shared::domain::transaction::Transaction;
 
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
-pub struct Block {
+pub struct StreamletBlock {
     pub hash: Option<Vec<u8>>,
     pub epoch: u32,
     pub length: u32,
     pub transactions: Vec<Transaction>,
 }
 
-impl Block {
+impl StreamletBlock {
 
     pub fn new(hash: Option<Vec<u8>>, epoch: u32, length: u32, transactions: Vec<Transaction>) -> Self {
-        Block {
+        StreamletBlock {
             hash,
             epoch,
             length,

@@ -2,8 +2,8 @@ use std::fs::{OpenOptions};
 use std::io::Write;
 use serde_json::to_string;
 use sha1::{Digest, Sha1};
-use shared::domain::block::Block;
 use shared::domain::transaction::Transaction;
+use crate::block::StreamletBlock;
 
 const GENESIS_EPOCH: u32 = 0;
 const GENESIS_LENGTH: u32 = 0;
@@ -12,8 +12,8 @@ const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks";
 
 
 pub struct Blockchain {
-    nodes: Vec<Block>,
-    delayed: Vec<Block>,
+    nodes: Vec<StreamletBlock>,
+    delayed: Vec<StreamletBlock>,
     my_node_id: u32,
 }
 
@@ -25,22 +25,22 @@ impl Blockchain {
         Blockchain { nodes: block_nodes, delayed: Vec::new(), my_node_id }
     }
 
-    fn genesis_block() -> Block {
-        Block::new(None, GENESIS_EPOCH, GENESIS_LENGTH, Vec::new())
+    fn genesis_block() -> StreamletBlock {
+        StreamletBlock::new(None, GENESIS_EPOCH, GENESIS_LENGTH, Vec::new())
     }
 
-    fn hash(block: &Block) -> Vec<u8> {
+    fn hash(block: &StreamletBlock) -> Vec<u8> {
         let block_data = to_string(block).expect("Failed to serialize Block");
         let mut hasher = Sha1::new();
         hasher.update(block_data.as_bytes());
         hasher.finalize().to_vec()
     }
 
-    fn find_previous_block(&self, block: &Block) -> Option<&Block> {
+    fn find_previous_block(&self, block: &StreamletBlock) -> Option<&StreamletBlock> {
         self.nodes.iter().find(|blockchain_node| Some(Blockchain::hash(blockchain_node)) == block.hash)
     }
 
-    pub fn add_block(&mut self, block: &Block) -> bool {
+    pub fn add_block(&mut self, block: &StreamletBlock) -> bool {
         match self.find_previous_block(&block) {
             Some(_) => {
                 self.nodes.push(block.clone());
@@ -68,7 +68,7 @@ impl Blockchain {
         }
     }
 
-    fn get_longest_chain(&self) -> &Block {
+    fn get_longest_chain(&self) -> &StreamletBlock {
         self.nodes.iter().max_by_key(|blockchain_node| blockchain_node.length).unwrap()
     }
 
@@ -76,13 +76,13 @@ impl Blockchain {
         self.nodes.iter().max_by_key(|blockchain_node| blockchain_node.length).unwrap().length
     }
 
-    pub fn get_next_block(&self, epoch: u32, transactions: Vec<Transaction>) -> Block {
+    pub fn get_next_block(&self, epoch: u32, transactions: Vec<Transaction>) -> StreamletBlock {
         let longest_chain_block = self.get_longest_chain();
         let hash = Blockchain::hash(longest_chain_block);
-        Block::new(Some(hash), epoch, longest_chain_block.length + 1, transactions)
+        StreamletBlock::new(Some(hash), epoch, longest_chain_block.length + 1, transactions)
     }
 
-    fn is_finalize(&self, node: &Block) -> bool {
+    fn is_finalize(&self, node: &StreamletBlock) -> bool {
         let mut count = 0;
         let mut epochs = Vec::new();
         let mut curr_node = node;
@@ -100,7 +100,7 @@ impl Blockchain {
         epochs[0] == epochs[1] + 1 && epochs[1] == epochs[2] + 1
     }
 
-    fn finalize(&mut self, node: &Block) {
+    fn finalize(&mut self, node: &StreamletBlock) {
         let mut curr_node = node;
         let mut to_finalize = Vec::new();
         while let Some(previous) = self.find_previous_block(curr_node) {
@@ -121,12 +121,12 @@ impl Blockchain {
         self.nodes.retain(|block| block.epoch == node.epoch || block.epoch == node.epoch - 1);
     }
 
-    fn print_blockchain(&self, node: &Block, n_tabs: usize) {
+    fn print_blockchain(&self, node: &StreamletBlock, n_tabs: usize) {
         if n_tabs == 1 {
             println!("[Epoch: {} | Length: {}]", node.epoch, node.length);
         }
 
-        let childs: Vec<Block> = self.nodes.iter().filter(|child| {
+        let childs: Vec<StreamletBlock> = self.nodes.iter().filter(|child| {
             match self.find_previous_block(child) {
                 None => false,
                 Some(previous) => { previous.epoch == node.epoch }

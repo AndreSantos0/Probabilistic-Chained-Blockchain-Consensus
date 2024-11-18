@@ -11,8 +11,10 @@ use crate::domain::node::Node;
 const MESSAGE_BYTES_LENGTH: usize = 4;
 const MESSAGE_SIGNATURE_BYTES_LENGTH: usize = 64;
 
+pub type NodeId = u32;
+pub type Signature = Vec<u8>;
 
-pub async fn connect<M>(my_node_id: u32, nodes: &Vec<Node>, public_keys: &HashMap<u32, Vec<u8>>, sender: Arc<Sender<M>>) {
+pub async fn connect<M>(my_node_id: u32, nodes: &Vec<Node>, public_keys: &HashMap<u32, Vec<u8>>, sender: Arc<Sender<(NodeId, M, Signature)>>) {
     for node in nodes {
         let address = format!("{}:{}", node.host, node.port);
         match TcpStream::connect(address).await {
@@ -20,7 +22,7 @@ pub async fn connect<M>(my_node_id: u32, nodes: &Vec<Node>, public_keys: &HashMa
                 let sender = Arc::clone(&sender);
                 if let Some(public_key) = public_keys.get(&node.id).cloned() {
                     tokio::spawn(async move {
-                        handle_connection(stream, sender, &public_key).await
+                        handle_connection(stream, sender, &public_key, node.id).await
                     });
                 }
             }
@@ -57,7 +59,7 @@ fn is_allowed(addr: SocketAddr) -> bool {
     addr.ip().is_loopback() //TODO: Discuss this
 }
 
-async fn handle_connection<M>(mut socket: TcpStream, sender: Arc<Sender<M>>, public_key: &Vec<u8>) {
+async fn handle_connection<M>(mut socket: TcpStream, sender: Arc<Sender<(NodeId, M, Signature)>>, public_key: &Vec<u8>, node_id: u32) {
     let public_key = UnparsedPublicKey::new(&ED25519, public_key);
     loop {
         let mut length_bytes = [0; MESSAGE_BYTES_LENGTH];
@@ -89,7 +91,7 @@ async fn handle_connection<M>(mut socket: TcpStream, sender: Arc<Sender<M>>, pub
             Ok(_) => {
                 match from_slice::<M>(&buffer) {
                     Ok(message) => {
-                        match sender.send(message).await {
+                        match sender.send((node_id, message, signature)).await {
                             Ok(_) => {},
                             Err(_) => return
                         }

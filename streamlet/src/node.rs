@@ -3,7 +3,7 @@ use crate::message::{Propose, StreamletMessage, Vote};
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 use ring::signature::Ed25519KeyPair;
-use shared::connection::{accept_connections, broadcast, connect};
+use shared::connection::{accept_connections, broadcast, connect, NodeId, Signature};
 use shared::domain::environment::Environment;
 use shared::transaction_generator::TransactionGenerator;
 use std::collections::HashMap;
@@ -57,7 +57,7 @@ impl StreamletNode {
         let address = format!("{}:{}", self.environment.my_node.host, self.environment.my_node.port);
         match TcpListener::bind(address).await {
             Ok(listener) => {
-                let (tx, rx) = mpsc::channel::<StreamletMessage>(MESSAGE_CHANNEL_SIZE);
+                let (tx, rx) = mpsc::channel::<(NodeId, StreamletMessage, Signature)>(MESSAGE_CHANNEL_SIZE);
                 let sender = Arc::new(tx);
                 connect(self.environment.my_node.id, &self.environment.nodes, &self.public_keys, sender).await;
                 let mut connections = accept_connections(self.environment.my_node.id, &self.environment.nodes, listener).await;
@@ -86,7 +86,7 @@ impl StreamletNode {
         });
     }
 
-    async fn execute_protocol(&mut self, mut message_queue_receiver: Receiver<StreamletMessage>, connections: &mut Vec<TcpStream>) {
+    async fn execute_protocol(&mut self, mut message_queue_receiver: Receiver<(NodeId, StreamletMessage, Signature)>, connections: &mut Vec<TcpStream>) {
         let mut rng = StdRng::seed_from_u64(SEED);
         loop {
             match self.is_new_epoch.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst) {
@@ -107,24 +107,24 @@ impl StreamletNode {
             let epoch = self.epoch.load(Ordering::SeqCst);
             if epoch < CONFUSION_START || epoch >= CONFUSION_START + CONFUSION_DURATION {
                 match message_queue_receiver.try_recv() {
-                    Ok(msg) => {
+                    Ok((sender, msg, _)) => {
                         match msg {
                             StreamletMessage::Propose(propose) => {
                                 if !self.blocks.contains_key(&propose.content.epoch) {
                                     self.blocks.insert(propose.content.epoch, true);
-                                    let message = StreamletMessage::Propose(Propose { content: propose.content.clone(), sender: propose.sender });
+                                    let message = StreamletMessage::Propose(Propose { content: propose.content.clone() });
                                     broadcast(&self.private_key, connections, message).await;
                                     let length = self.blockchain.get_longest_chain_length();
                                     if propose.content.length > length {
-                                        let vote = StreamletMessage::Vote(Vote { content: propose.content, sender: self.environment.my_node.id });
+                                        let vote = StreamletMessage::Vote(Vote { content: propose.content });
                                         broadcast(&self.private_key, connections, vote).await;
                                     }
                                 }
                             },
                             StreamletMessage::Vote(vote) => {
                                 let nodes_voted = self.votes_ids.entry(vote.content.epoch).or_insert_with(Vec::new);
-                                if !nodes_voted.contains(&vote.sender) {
-                                    nodes_voted.push(vote.sender);
+                                if !nodes_voted.contains(&sender) {
+                                    nodes_voted.push(sender);
                                     if nodes_voted.len() == self.environment.nodes.len() * 2 / 3 + 1 {
                                         let finalization = self.blockchain.add_block(&vote.content);
                                         if finalization {
@@ -156,7 +156,7 @@ impl StreamletNode {
         let epoch = self.epoch.load(Ordering::SeqCst);
         let transactions = self.transaction_generator.generate(self.environment.my_node.id);
         let block = self.blockchain.get_next_block(epoch, transactions);
-        let message = StreamletMessage::Propose(Propose { content: block, sender: self.environment.my_node.id });
+        let message = StreamletMessage::Propose(Propose { content: block });
         broadcast(&self.private_key, connections, message).await;
     }
 }
