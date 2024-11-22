@@ -1,5 +1,5 @@
 use crate::blockchain::Blockchain;
-use crate::message::{Propose, SimplexMessage, Timeout, Vote};
+use crate::message::{Finalize, Propose, SimplexMessage, Timeout, View, Vote};
 use ring::signature::Ed25519KeyPair;
 use shared::connection::{accept_connections, broadcast, connect, NodeId, Signature};
 use shared::domain::environment::Environment;
@@ -27,6 +27,7 @@ pub struct SimplexNode {
     blocks: HashMap<u32, bool>,
     votes: HashMap<u32, Vec<(NodeId, Signature)>>,
     timeouts: HashMap<Timeout, Vec<NodeId>>,
+    finalizes: HashMap<u32, Vec<NodeId>>,
     blockchain: Blockchain,
     transaction_generator: TransactionGenerator,
     public_keys: HashMap<u32, Vec<u8>>,
@@ -47,6 +48,7 @@ impl SimplexNode {
             blocks: HashMap::new(),
             votes: HashMap::new(),
             timeouts: HashMap::new(),
+            finalizes: HashMap::new(),
             blockchain: Blockchain::new(my_node_id),
             transaction_generator: TransactionGenerator::new(),
             public_keys,
@@ -138,9 +140,10 @@ impl SimplexNode {
                     let leader = self.get_leader(iteration, &mut rng);
                     match message {
                         SimplexMessage::Propose(propose) => self.handle_propose(propose, sender, leader, connections).await,
-                        SimplexMessage::Vote(vote) => self.handle_vote(vote, sender, signature).await,
+                        SimplexMessage::Vote(vote) => self.handle_vote(vote, sender, signature, reset_sender.clone(), connections).await,
                         SimplexMessage::Timeout(timeout) => self.handle_timeout(timeout, sender, reset_sender.clone()).await,
-                        SimplexMessage::Finalize(finalize) => {}
+                        SimplexMessage::Finalize(finalize) => self.handle_finalize(finalize, sender).await
+                        SimplexMessage::View(view) => self.handle_view(view, sender).await
                     }
                 }
             }
@@ -165,16 +168,25 @@ impl SimplexNode {
         }
     }
 
-    async fn handle_vote(&mut self, vote: Vote, sender: NodeId, signature: Signature) {
+    async fn handle_vote(&mut self, vote: Vote, sender: NodeId, signature: Signature, reset_sender: Sender<()>, connections: &mut Vec<TcpStream>) {
         let vote_signatures = self.votes.entry(vote.content.iteration).or_insert_with(Vec::new);
         let is_first_vote = !vote_signatures.iter().any(|(node_id, _)| *node_id == sender);
         if is_first_vote {
             vote_signatures.push((sender, signature));
             if vote_signatures.len() == self.environment.nodes.len() * 2 / 3 + 1 {
                 let notarized_block = SimplexBlock { signatures: vote_signatures.to_vec(), ..vote.content.clone() };
-                // add block
-                // reset_sender.send(());
-                // broadcast Finalize
+                let clone_block = notarized_block.clone();
+                self.blockchain.add_block(notarized_block);
+                if vote.content.iteration == self.iteration.load(Ordering::SeqCst) {
+                    match reset_sender.send(()).await {
+                        Ok(_) => {},
+                        Err(_) => return
+                    };
+                    let finalize = SimplexMessage::Finalize(Finalize { iter: vote.content.iteration});
+                    broadcast(&self.private_key, connections, finalize).await;
+                }
+                let view = SimplexMessage::View(View { last_notarized_block: clone_block });
+                broadcast(&self.private_key, connections, view).await;
             }
         }
     }
@@ -191,5 +203,22 @@ impl SimplexNode {
                 };
             }
         }
+    }
+
+    fn handle_finalize(&mut self, finalize: Finalize, sender: NodeId) {
+        let finalizes = self.finalizes.entry(finalize.iter).or_insert_with(Vec::new);
+        let is_first_finalize = !finalizes.iter().any(|node_id| *node_id == sender);
+        if is_first_finalize {
+            finalizes.push(sender);
+            if finalizes.len() == self.environment.nodes.len() * 2 / 3 + 1 {
+               self.blockchain.finalize(finalize.iter);
+            }
+        }
+    }
+
+    fn handle_view(&self, view: View, sender: NodeId) {
+        // check view block signatures
+        // check for missing blocks
+        // ask for missing blocks to a process which notarized the block
     }
 }

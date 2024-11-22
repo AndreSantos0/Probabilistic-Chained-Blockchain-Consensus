@@ -22,6 +22,12 @@ pub struct Finalize {
     pub iter: u32,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct View {
+    pub last_notarized_block: SimplexBlock,
+}
+
+
 #[derive(serde::Serialize,serde::Deserialize, Debug)]
 #[serde(tag = "type", content = "data")]
 pub enum SimplexMessage {
@@ -29,4 +35,5 @@ pub enum SimplexMessage {
     Vote(Vote),
     Timeout(Timeout),
     Finalize(Finalize),
+    View(View),
 }
