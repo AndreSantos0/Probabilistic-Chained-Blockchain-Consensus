@@ -124,7 +124,7 @@ pub async fn broadcast<M>(private_key: &Ed25519KeyPair, connections: &mut Vec<Tc
     let length_bytes = length.to_be_bytes();
     let signature = private_key.sign(serialized_bytes);
 
-    for i in (0..connections.len()).rev() {
+    for i in 0..connections.len() {
         let stream = &mut connections[i];
         if let Err(e) = stream.write_all(&length_bytes).await {
             eprintln!("Failed to send message length to socket: {}", e);
@@ -141,5 +141,33 @@ pub async fn broadcast<M>(private_key: &Ed25519KeyPair, connections: &mut Vec<Tc
             connections.remove(i);
             continue;
         }
+    }
+}
+
+pub async fn unicast<M>(private_key: &Ed25519KeyPair, mut connection: TcpStream, message: M) {
+    let serialized_message = match to_string(&message) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("Failed to serialize message: {}", e);
+            return;
+        }
+    };
+
+    let serialized_bytes = serialized_message.as_bytes();
+    let length = serialized_bytes.len() as u32;
+    let length_bytes = length.to_be_bytes();
+    let signature = private_key.sign(serialized_bytes);
+
+    if let Err(e) = connection.write_all(&length_bytes).await {
+        eprintln!("Failed to send message length to socket: {}", e);
+        return;
+    }
+    if let Err(e) = connection.write_all(serialized_bytes).await {
+        eprintln!("Failed to send message to socket: {}", e);
+        return;
+    }
+    if let Err(e) = connection.write_all(signature.as_ref()).await {
+        eprintln!("Failed to send signature to socket: {}", e);
+        return;
     }
 }

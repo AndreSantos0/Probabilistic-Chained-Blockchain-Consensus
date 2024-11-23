@@ -1,6 +1,6 @@
 use shared::connection::{NodeId, Signature};
 use shared::domain::transaction::Transaction;
-
+use crate::message::{SimplexMessage};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct SimplexBlock {
@@ -8,7 +8,7 @@ pub struct SimplexBlock {
     pub iteration: u32,
     pub length: u32,
     pub transactions: Vec<Transaction>,
-    pub signatures: Vec<(NodeId, Signature)>,
+    pub signatures: Vec<(SimplexMessage, NodeId, Signature)>,
 }
 
 impl SimplexBlock {

@@ -48,12 +48,20 @@ impl Blockchain {
     }
 
     pub fn add_block(&mut self, block: SimplexBlock) {
-       self.nodes.push(block);
+        let last = self.last_notarized();
+        if Some(Blockchain::hash(&last)) == block.hash {
+            self.nodes.push(block);
+        }
     }
 
     pub fn is_extendable(&self, new_block: &SimplexBlock) -> bool {
         let last = self.nodes.last().unwrap_or_else(|| &Self::genesis_block());
         new_block.hash == Some(Self::hash(last)) && new_block.length == last.length + 1
+    }
+
+    pub fn is_missing(&self, block: SimplexBlock) -> bool {
+        let last = self.last_notarized();
+        last.length < block.length //TODO: Se block tiver apenas length + 1 skippar a fase de pedir os blocos e introduzir logo
     }
 
     pub fn finalize(&mut self, iteration: u32) {
