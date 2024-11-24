@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey, ED25519};
+use serde::{Serialize};
+use serde::de::DeserializeOwned;
 use serde_json::{from_slice, to_string};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -14,15 +16,21 @@ const MESSAGE_SIGNATURE_BYTES_LENGTH: usize = 64;
 pub type NodeId = u32;
 pub type Signature = Vec<u8>;
 
-pub async fn connect<M>(my_node_id: u32, nodes: &Vec<Node>, public_keys: &HashMap<u32, Vec<u8>>, sender: Arc<Sender<(NodeId, M, Signature)>>) {
-    for node in nodes {
+pub async fn connect<M>(
+    my_node_id: u32,
+    nodes: &Vec<Node>,
+    public_keys: &HashMap<u32, Vec<u8>>,
+    sender: Arc<Sender<(NodeId, M, Signature)>>
+) where M: DeserializeOwned + Send + 'static {
+    for node in nodes.iter() {
         let address = format!("{}:{}", node.host, node.port);
+        let node_id = node.id;
         match TcpStream::connect(address).await {
             Ok(stream) => {
                 let sender = Arc::clone(&sender);
                 if let Some(public_key) = public_keys.get(&node.id).cloned() {
                     tokio::spawn(async move {
-                        handle_connection(stream, sender, &public_key, node.id).await
+                        handle_connection(stream, sender, &public_key, node_id).await
                     });
                 }
             }
@@ -59,7 +67,12 @@ fn is_allowed(addr: SocketAddr) -> bool {
     addr.ip().is_loopback() //TODO: Discuss this
 }
 
-async fn handle_connection<M>(mut socket: TcpStream, sender: Arc<Sender<(NodeId, M, Signature)>>, public_key: &Vec<u8>, node_id: u32) {
+async fn handle_connection<M>(
+    mut socket: TcpStream,
+    sender: Arc<Sender<(NodeId, M, Signature)>>,
+    public_key: &Vec<u8>,
+    node_id: u32
+) where M: DeserializeOwned {
     let public_key = UnparsedPublicKey::new(&ED25519, public_key);
     loop {
         let mut length_bytes = [0; MESSAGE_BYTES_LENGTH];
@@ -110,7 +123,11 @@ async fn handle_connection<M>(mut socket: TcpStream, sender: Arc<Sender<(NodeId,
     }
 }
 
-pub async fn broadcast<M>(private_key: &Ed25519KeyPair, connections: &mut Vec<TcpStream>, message: M) {
+pub async fn broadcast<M>(
+    private_key: &Ed25519KeyPair,
+    connections: &mut Vec<TcpStream>,
+    message: M
+) where M: Serialize {
     let serialized_message = match to_string(&message) {
         Ok(json) => json,
         Err(e) => {
@@ -144,7 +161,11 @@ pub async fn broadcast<M>(private_key: &Ed25519KeyPair, connections: &mut Vec<Tc
     }
 }
 
-pub async fn unicast<M>(private_key: &Ed25519KeyPair, mut connection: TcpStream, message: M) {
+pub async fn unicast<M>(
+    private_key: &Ed25519KeyPair,
+    connection: &mut TcpStream,
+    message: M
+) where M: Serialize {
     let serialized_message = match to_string(&message) {
         Ok(json) => json,
         Err(e) => {

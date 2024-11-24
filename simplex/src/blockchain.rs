@@ -3,10 +3,10 @@ use serde_json::to_string;
 use sha1::{Digest, Sha1};
 use shared::domain::transaction::Transaction;
 use crate::block::SimplexBlock;
+use std::io::Write;
 
 const GENESIS_EPOCH: u32 = 0;
 const GENESIS_LENGTH: u32 = 0;
-const N_NODES_FOR_FINALIZATION: usize = 3;
 const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks";
 
 
@@ -34,7 +34,7 @@ impl Blockchain {
         }
     }
 
-    fn hash(block: &SimplexBlock) -> Vec<u8> {
+    pub fn hash(block: &SimplexBlock) -> Vec<u8> {
         let block_data = to_string(block).expect("Failed to serialize Block");
         let mut hasher = Sha1::new();
         hasher.update(block_data.as_bytes());
@@ -42,7 +42,7 @@ impl Blockchain {
     }
 
     pub fn get_next_block(&self, iteration: u32, transactions: Vec<Transaction>) -> SimplexBlock {
-        let last = self.nodes.last().unwrap_or_else(|| &Self::genesis_block());
+        let last = self.nodes.last().unwrap();
         let hash = Self::hash(last);
         SimplexBlock::new(Some(hash), iteration, last.length + 1, transactions)
     }
@@ -55,13 +55,28 @@ impl Blockchain {
     }
 
     pub fn is_extendable(&self, new_block: &SimplexBlock) -> bool {
-        let last = self.nodes.last().unwrap_or_else(|| &Self::genesis_block());
+        let last = self.nodes.last().unwrap();
         new_block.hash == Some(Self::hash(last)) && new_block.length == last.length + 1
     }
 
     pub fn is_missing(&self, block: SimplexBlock) -> bool {
         let last = self.last_notarized();
         last.length < block.length //TODO: Se block tiver apenas length + 1 skippar a fase de pedir os blocos e introduzir logo
+    }
+
+    pub fn get_missing(&self, last: SimplexBlock) -> Option<Vec<SimplexBlock>> {
+        let from = last.iteration;
+        let first_missing = self.nodes.iter().find(|block| block.length == last.iteration + 1);
+        match first_missing {
+            Some(block) => {
+                if Some(Self::hash(&last)) == block.hash {
+                    Some(self.nodes.iter().filter(|block| block.iteration > from).cloned().collect())
+                } else {
+                    None
+                }
+            },
+            None => None
+        }
     }
 
     pub fn finalize(&mut self, iteration: u32) {

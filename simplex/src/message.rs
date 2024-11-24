@@ -13,8 +13,6 @@ pub struct Vote {
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Timeout {
     pub next_iter: u32,
-    pub last_notarized_iter: u32,
-    pub last_notarized_block: SimplexBlock,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
@@ -32,6 +30,11 @@ pub struct Request {
     pub last_notarized_block: SimplexBlock,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+pub struct Reply {
+    pub blocks: Vec<SimplexBlock>,
+}
+
 
 #[derive(Clone, serde::Serialize,serde::Deserialize, Debug)]
 #[serde(tag = "type", content = "data")]
@@ -42,4 +45,5 @@ pub enum SimplexMessage {
     Finalize(Finalize),
     View(View),
     Request(Request),
+    Reply(Reply),
 }
