@@ -77,7 +77,7 @@ async fn handle_connection<M>(
     loop {
         let mut length_bytes = [0; MESSAGE_BYTES_LENGTH];
         match socket.read_exact(&mut length_bytes).await {
-            Ok(_) => {}
+            Ok(_) => {  }
             Err(e) => {
                 println!("Error reading length bytes: {}", e);
                 return;
@@ -86,7 +86,7 @@ async fn handle_connection<M>(
         let length = u32::from_be_bytes(length_bytes);
         let mut buffer = vec![0; length as usize];
         match socket.read_exact(&mut buffer).await {
-            Ok(_) => {}
+            Ok(_) => {  }
             Err(e) => {
                 println!("Error reading message bytes: {}", e);
                 return;
@@ -94,9 +94,9 @@ async fn handle_connection<M>(
         };
         let mut signature = vec![0; MESSAGE_SIGNATURE_BYTES_LENGTH];
         match socket.read_exact(&mut signature).await {
-            Ok(_) => {}
+            Ok(_) => {  }
             Err(e) => {
-                println!("Error reading length bytes: {}", e);
+                println!("Error reading signature bytes: {}", e);
                 return;
             }
         };
@@ -105,7 +105,7 @@ async fn handle_connection<M>(
                 match from_slice::<M>(&buffer) {
                     Ok(message) => {
                         match sender.send((node_id, message, signature)).await {
-                            Ok(_) => {},
+                            Ok(_) => {  },
                             Err(_) => return
                         }
                     }
@@ -158,6 +158,7 @@ pub async fn broadcast<M>(
             connections.remove(i);
             continue;
         }
+        println!("Sent message {}", serialized_message);
     }
 }
 
@@ -191,4 +192,5 @@ pub async fn unicast<M>(
         eprintln!("Failed to send signature to socket: {}", e);
         return;
     }
+    println!("Sent message {}", serialized_message);
 }
