@@ -1,4 +1,4 @@
-use crate::block::SimplexBlock;
+use crate::block::{NotarizedBlock, SimplexBlock};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Propose {
@@ -22,7 +22,7 @@ pub struct Finalize {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct View {
-    pub last_notarized_block: SimplexBlock,
+    pub last_notarized_block: NotarizedBlock,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
@@ -32,7 +32,7 @@ pub struct Request {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Reply {
-    pub blocks: Vec<SimplexBlock>,
+    pub blocks: Vec<NotarizedBlock>,
 }
 
 

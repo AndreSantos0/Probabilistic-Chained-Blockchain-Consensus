@@ -2,8 +2,10 @@ use std::fs::OpenOptions;
 use serde_json::to_string;
 use sha1::{Digest, Sha1};
 use shared::domain::transaction::Transaction;
-use crate::block::SimplexBlock;
+use crate::block::{NotarizedBlock, SimplexBlock};
 use std::io::Write;
+use shared::connection::{NodeId, Signature};
+use crate::message::SimplexMessage;
 
 const GENESIS_ITERATION: u32 = 0;
 const GENESIS_LENGTH: u32 = 0;
@@ -11,10 +13,10 @@ const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks";
 
 
 pub struct Blockchain {
-    nodes: Vec<SimplexBlock>,
+    nodes: Vec<NotarizedBlock>,
     my_node_id: u32,
     to_be_finalized: Vec<u32>, // vec iteration of blocks to be finalized
-    delayed_notarized: Vec<SimplexBlock>,
+    delayed_notarized: Vec<NotarizedBlock>,
     finalized_height: u32,
 }
 
@@ -22,7 +24,7 @@ impl Blockchain {
 
     pub fn new(my_node_id: u32) -> Self {
         let mut block_nodes = Vec::new();
-        block_nodes.push(Self::genesis_block());
+        block_nodes.push(NotarizedBlock { block: Self::genesis_block(), signatures: Vec::new() });
         Blockchain { nodes: block_nodes, my_node_id, to_be_finalized: Vec::new(), delayed_notarized: Vec::new(), finalized_height: 0 }
     }
 
@@ -32,7 +34,7 @@ impl Blockchain {
 
     pub fn last_notarized(&self) -> SimplexBlock {
         match self.nodes.last() {
-            Some(block) => block.clone(),
+            Some(notarized) => notarized.block.clone(),
             None => Self::genesis_block(),
         }
     }
@@ -45,7 +47,11 @@ impl Blockchain {
     }
 
     pub fn get_block(&self, iteration: u32) -> Option<&SimplexBlock> {
-        self.nodes.iter().find(|block| block.iteration == iteration)
+        let notarized = self.nodes.iter().find(|notarized| notarized.block.iteration == iteration);
+        match notarized {
+            None => None,
+            Some(notarized) => Some(&notarized.block)
+        }
     }
 
     pub fn get_next_block(&self, iteration: u32, transactions: Vec<Transaction>) -> SimplexBlock {
@@ -54,13 +60,13 @@ impl Blockchain {
         SimplexBlock::new(Some(hash), iteration, last.length + 1, transactions)
     }
 
-    pub fn add_block(&mut self, block: SimplexBlock) -> bool {
+    pub fn add_block(&mut self, block: SimplexBlock, signatures: Vec<(SimplexMessage, Signature, NodeId)>) -> bool {
         let last = self.last_notarized();
         match self.get_block(block.iteration) {
             None => {
                 if Some(Blockchain::hash(&last)) == block.hash && block.iteration > last.iteration && block.length == last.length + 1 {
                     let iteration = block.iteration;
-                    self.nodes.push(block);
+                    self.nodes.push(NotarizedBlock { block, signatures });
                     if self.to_be_finalized.contains(&iteration) {
                         self.finalize(iteration);
                         self.to_be_finalized.retain(|iter| *iter != iteration);
@@ -68,9 +74,9 @@ impl Blockchain {
                     while !self.delayed_notarized.is_empty() {
                         if let Some(delayed) = self.delayed_notarized.first() {
                             let last = self.last_notarized();
-                            if Some(Blockchain::hash(&last)) == delayed.hash && delayed.iteration > last.iteration && delayed.length == last.length + 1 {
+                            if Some(Blockchain::hash(&last)) == delayed.block.hash && delayed.block.iteration > last.iteration && delayed.block.length == last.length + 1 {
                                 let delayed_block = self.delayed_notarized.remove(0);
-                                let iteration = delayed_block.iteration;
+                                let iteration = delayed_block.block.iteration;
                                 self.nodes.push(delayed_block);
                                 if self.to_be_finalized.contains(&iteration) {
                                     self.finalize(iteration);
@@ -83,7 +89,7 @@ impl Blockchain {
                     }
                     true
                 } else {
-                    self.delayed_notarized.push(block);
+                    self.delayed_notarized.push(NotarizedBlock { block, signatures });
                     false
                 }
             }
@@ -106,13 +112,12 @@ impl Blockchain {
         last.length < length_observed //TODO: Se block tiver apenas length + 1 skippar a fase de pedir os blocos e introduzir logo
     }
 
-    pub fn get_missing(&self, last: SimplexBlock) -> Option<Vec<SimplexBlock>> {
-        let from = last.iteration;
-        let first_missing = self.nodes.iter().find(|block| block.length == last.iteration + 1);
+    pub fn get_missing(&self, last: SimplexBlock) -> Option<Vec<NotarizedBlock>> {
+        let first_missing = self.nodes.iter().find(|notarized| notarized.block.length == last.length + 1);
         match first_missing {
-            Some(block) => {
-                if Some(Self::hash(&last)) == block.hash {
-                    Some(self.nodes.iter().filter(|block| block.iteration > from).cloned().collect())
+            Some(notarized) => {
+                if Some(Self::hash(&last)) == notarized.block.hash {
+                    Some(self.nodes.iter().filter(|notarized| notarized.block.length > last.length).cloned().collect())
                 } else {
                     None
                 }
@@ -134,17 +139,21 @@ impl Blockchain {
             .expect("Could not find Blockchain file");
 
 
-        let blocks: Vec<&SimplexBlock> = self.nodes.iter().filter(|block| block.iteration <= iteration && block.iteration > self.finalized_height).collect();
-        for block in blocks {
-            writeln!(file, "Iteration: {} | Length: {} | Transactions: {:?}", block.iteration, block.length, block.transactions).expect("Error writing block to file");
+        let blocks: Vec<&NotarizedBlock> = self.nodes.iter()
+            .filter(|notarized| notarized.block.iteration <= iteration && notarized.block.iteration > self.finalized_height)
+            .collect();
+
+        for notarized in blocks {
+            writeln!(file, "Iteration: {} | Length: {} | Transactions: {:?}", notarized.block.iteration, notarized.block.length, notarized.block.transactions)
+                .expect("Error writing block to file");
         }
         self.finalized_height = iteration;
-        self.nodes.retain(|block| block.iteration >= iteration);
+        self.nodes.retain(|notarized| notarized.block.iteration >= iteration);
     }
 
     pub fn print(&self) {
-        for block in self.nodes.iter() {
-            println!("[Iteration: {} | Length: {}]", block.iteration, block.length);
+        for notarized in self.nodes.iter() {
+            println!("[Iteration: {} | Length: {}]", notarized.block.iteration, notarized.block.length);
         }
     }
 }

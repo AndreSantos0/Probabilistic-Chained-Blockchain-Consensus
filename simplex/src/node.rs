@@ -1,4 +1,4 @@
-use crate::block::SimplexBlock;
+use crate::block::{NotarizedBlock, SimplexBlock};
 use crate::blockchain::Blockchain;
 use crate::message::{Finalize, Propose, Reply, Request, SimplexMessage, Timeout, View, Vote};
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey, ED25519};
@@ -26,7 +26,7 @@ pub struct SimplexNode {
     iteration: Arc<AtomicU32>,
     is_timeout: Arc<AtomicBool>,
     blocks: HashMap<u32, SimplexBlock>,
-    votes: HashMap<HashedBlock, Vec<(SimplexMessage, NodeId, Signature)>>,
+    votes: HashMap<HashedBlock, Vec<(SimplexMessage, Signature, NodeId)>>,
     timeouts: HashMap<u32, Vec<NodeId>>,
     finalizes: HashMap<u32, Vec<NodeId>>,
     blockchain: Blockchain,
@@ -197,14 +197,13 @@ impl SimplexNode {
         connections: &mut Vec<TcpStream>,
     ) {
         let vote_signatures = self.votes.entry(Blockchain::hash(&vote.content)).or_insert_with(Vec::new);
-        let is_first_vote = !vote_signatures.iter().any(|(_, node_id, _)| *node_id == sender);
+        let is_first_vote = !vote_signatures.iter().any(|(_, _, node_id)| *node_id == sender);
         if is_first_vote {
-            vote_signatures.push((message, sender, signature));
+            vote_signatures.push((message, signature, sender));
             if vote_signatures.len() == self.environment.nodes.len() * 2 / 3 + 1 {
-                let notarized_block = SimplexBlock { signatures: vote_signatures.to_vec(), ..vote.content };
-                let clone_block = notarized_block.clone();
-                let is_added = self.blockchain.add_block(notarized_block);
-                if vote.content.iteration == self.iteration.load(Ordering::SeqCst) {
+                let block = vote.content.clone();
+                let is_added = self.blockchain.add_block(vote.content, vote_signatures.to_vec());
+                if block.iteration == self.iteration.load(Ordering::SeqCst) {
                     self.iteration.fetch_add(1, Ordering::SeqCst);
                     match reset_tx.send(()).await {
                         Ok(_) => {}
@@ -216,14 +215,14 @@ impl SimplexNode {
                     };
                 }
                 if !self.is_timeout.load(Ordering::SeqCst) {
-                    let finalize = SimplexMessage::Finalize(Finalize { iter: vote.content.iteration });
+                    let finalize = SimplexMessage::Finalize(Finalize { iter: block.iteration });
                     broadcast(&self.private_key, connections, finalize).await;
                 }
                 if is_added {
-                    let view = SimplexMessage::View(View { last_notarized_block: clone_block });
+                    let view = SimplexMessage::View(View { last_notarized_block: NotarizedBlock { block, signatures: vote_signatures.to_vec() } });
                     broadcast(&self.private_key, connections, view).await;
                 } else {
-                    if self.blockchain.is_missing(clone_block.length) {
+                    if self.blockchain.is_missing(block.length) {
                         if let Some(sender_node) = self.environment.nodes.iter().find(|node| node.id == sender) {
                             if let Some(stream) = connections.iter_mut().find(|stream| stream.peer_addr().unwrap().to_string() == format!("{}:{}", sender_node.host, sender_node.port)) {
                                 unicast(&self.private_key, stream, SimplexMessage::Request(Request { last_notarized_block: self.blockchain.last_notarized() })).await;
@@ -291,7 +290,7 @@ impl SimplexNode {
     async fn handle_view(&self, view: View, connections: &mut Vec<TcpStream>, sender: NodeId) {
         // check view block signatures
         // TODO vote for the block if signatures are valid
-        for (message, node_id, signature) in view.last_notarized_block.signatures.iter() {
+        for (message, signature, node_id) in view.last_notarized_block.signatures.iter() {
             match self.public_keys.get(node_id) {
                 None => return,
                 Some(key) => {
@@ -312,7 +311,7 @@ impl SimplexNode {
             }
         }
         // check for missing blocks
-        if self.blockchain.is_missing(view.last_notarized_block.length) {
+        if self.blockchain.is_missing(view.last_notarized_block.block.length) {
             // ask for missing blocks to a process which notarized the block
             if let Some(sender_node) = self.environment.nodes.iter().find(|node| node.id == sender) {
                 if let Some(stream) = connections.iter_mut().find(|stream| stream.peer_addr().unwrap().to_string() == format!("{}:{}", sender_node.host, sender_node.port)) {
@@ -338,8 +337,8 @@ impl SimplexNode {
     }
 
     fn handle_reply(&mut self, reply: Reply) {
-        for block in reply.blocks {
-            for (message, node_id, signature) in block.signatures.iter() {
+        for notarized in reply.blocks {
+            for (message, signature, node_id) in notarized.signatures.iter() {
                 match self.public_keys.get(node_id) {
                     Some(key) => {
                         let public_key = UnparsedPublicKey::new(&ED25519, key);
@@ -359,7 +358,7 @@ impl SimplexNode {
                     None => return,
                 }
             }
-            self.blockchain.add_block(block);
+            self.blockchain.add_block(notarized.block, notarized.signatures);
         }
     }
 }
