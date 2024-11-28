@@ -158,7 +158,6 @@ pub async fn broadcast<M>(
             connections.remove(i);
             continue;
         }
-        println!("Sent message {}", serialized_message);
     }
 }
 
@@ -192,5 +191,4 @@ pub async fn unicast<M>(
         eprintln!("Failed to send signature to socket: {}", e);
         return;
     }
-    println!("Sent message {}", serialized_message);
 }

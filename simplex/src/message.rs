@@ -22,12 +22,12 @@ pub struct Finalize {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct View {
-    pub last_notarized_block: NotarizedBlock,
+    pub last_notarized: NotarizedBlock,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Request {
-    pub last_notarized_block: SimplexBlock,
+    pub last_notarized: SimplexBlock,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]

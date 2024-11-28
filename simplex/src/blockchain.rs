@@ -60,56 +60,55 @@ impl Blockchain {
         SimplexBlock::new(Some(hash), iteration, last.length + 1, transactions)
     }
 
+    fn is_delayed(&self, length: u32) -> bool {
+        match self.nodes.iter().find(|notarized| notarized.block.length == length) {
+            None => false,
+            Some(_) => true
+        }
+    }
+
     pub fn add_block(&mut self, block: SimplexBlock, signatures: Vec<(SimplexMessage, Signature, NodeId)>) -> bool {
         let last = self.last_notarized();
-        match self.get_block(block.iteration) {
-            None => {
-                if Some(Blockchain::hash(&last)) == block.hash && block.iteration > last.iteration && block.length == last.length + 1 {
-                    let iteration = block.iteration;
-                    self.nodes.push(NotarizedBlock { block, signatures });
-                    if self.to_be_finalized.contains(&iteration) {
-                        self.finalize(iteration);
-                        self.to_be_finalized.retain(|iter| *iter != iteration);
-                    }
-                    while !self.delayed_notarized.is_empty() {
-                        if let Some(delayed) = self.delayed_notarized.first() {
-                            let last = self.last_notarized();
-                            if Some(Blockchain::hash(&last)) == delayed.block.hash && delayed.block.iteration > last.iteration && delayed.block.length == last.length + 1 {
-                                let delayed_block = self.delayed_notarized.remove(0);
-                                let iteration = delayed_block.block.iteration;
-                                self.nodes.push(delayed_block);
-                                if self.to_be_finalized.contains(&iteration) {
-                                    self.finalize(iteration);
-                                    self.to_be_finalized.retain(|iter| *iter != iteration);
-                                }
-                            } else {
-                                break
-                            }
-                        } // else is impossible
-                    }
-                    true
-                } else {
-                    self.delayed_notarized.push(NotarizedBlock { block, signatures });
-                    false
-                }
+        if Some(Blockchain::hash(&last)) == block.hash && block.iteration > last.iteration && block.length == last.length + 1 {
+            let iteration = block.iteration;
+            self.nodes.push(NotarizedBlock { block, signatures });
+            if self.to_be_finalized.contains(&iteration) {
+                self.finalize(iteration);
+                self.to_be_finalized.retain(|iter| *iter != iteration);
             }
-            Some(_) => false
+            while !self.delayed_notarized.is_empty() {
+                if let Some(delayed) = self.delayed_notarized.first() {
+                    let last = self.last_notarized();
+                    if Some(Blockchain::hash(&last)) == delayed.block.hash && delayed.block.iteration > last.iteration && delayed.block.length == last.length + 1 {
+                        let delayed_block = self.delayed_notarized.remove(0);
+                        let iteration = delayed_block.block.iteration;
+                        self.nodes.push(delayed_block);
+                        if self.to_be_finalized.contains(&iteration) {
+                            self.finalize(iteration);
+                            self.to_be_finalized.retain(|iter| *iter != iteration);
+                        }
+                    } else {
+                        break
+                    }
+                } // else is impossible
+            }
+            true
+        } else {
+            if self.is_delayed(block.length) {
+                self.delayed_notarized.push(NotarizedBlock { block, signatures });
+            }
+            false
         }
     }
 
     pub fn is_extendable(&self, new_block: &SimplexBlock) -> bool {
         let last = self.last_notarized();
-        println!("-----");
-        println!("Last Block: {:?} | {} | {}", last.hash, last.iteration, last.length);
-        println!("Last Hash: {:?}", Self::hash(&last));
-        println!("New Block: {:?} | {} | {}", new_block.hash, new_block.iteration, new_block.length);
-        println!("-----");
         new_block.hash == Some(Self::hash(&last)) && new_block.length == last.length + 1 && new_block.iteration > last.iteration
     }
 
     pub fn is_missing(&self, length_observed: u32) -> bool {
         let last = self.last_notarized();
-        last.length < length_observed //TODO: Se block tiver apenas length + 1 skippar a fase de pedir os blocos e introduzir logo
+        last.length < length_observed
     }
 
     pub fn get_missing(&self, last: SimplexBlock) -> Option<Vec<NotarizedBlock>> {
