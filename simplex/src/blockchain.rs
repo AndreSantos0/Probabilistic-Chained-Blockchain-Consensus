@@ -1,15 +1,15 @@
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use serde_json::to_string;
 use sha1::{Digest, Sha1};
 use shared::domain::transaction::Transaction;
 use crate::block::{NotarizedBlock, SimplexBlock};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use shared::connection::{NodeId, Signature};
 use crate::message::SimplexMessage;
 
 const GENESIS_ITERATION: u32 = 0;
 const GENESIS_LENGTH: u32 = 0;
-const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks";
+const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks.ndjson";
 
 
 pub struct Blockchain {
@@ -111,18 +111,43 @@ impl Blockchain {
         last.length < length_observed
     }
 
-    pub fn get_missing(&self, last: SimplexBlock) -> Option<Vec<NotarizedBlock>> {
-        let first_missing = self.nodes.iter().find(|notarized| notarized.block.length == last.length + 1);
-        match first_missing {
-            Some(notarized) => {
-                if Some(Self::hash(&last)) == notarized.block.hash {
-                    Some(self.nodes.iter().filter(|notarized| notarized.block.length > last.length).cloned().collect())
-                } else {
-                    None
+    pub fn get_missing(&self, from: &SimplexBlock) -> Vec<NotarizedBlock> {
+        let mut missing = Vec::new();
+        let last = self.last_notarized();
+        for length in from.length + 1 ..= last.length {
+            match self.nodes.iter().find(|notarized| notarized.block.length == length) {
+                Some(notarized) => {
+                    if length == from.length + 1 {
+                        if Some(Self::hash(&from)) == notarized.block.hash {
+                            missing.push(notarized.clone());
+                        } else {
+                            break
+                        }
+                    } else {
+                        missing.push(notarized.clone());
+                    }
                 }
-            },
-            None => None
+                None => {
+                    match self.get_finalized_block(length) {
+                        Some(notarized) => {
+                            if length == from.length + 1 {
+                                if Some(Self::hash(&from)) == notarized.block.hash {
+                                    missing.push(notarized);
+                                } else {
+                                    break
+                                }
+                            } else {
+                                missing.push(notarized);
+                            }
+                        }
+                        None => {
+                            break
+                        }
+                    }
+                }
+            }
         }
+        missing
     }
 
     pub fn add_to_be_finalized(&mut self, iteration: u32) {
@@ -137,17 +162,32 @@ impl Blockchain {
             .open(format!("{}{}", FINALIZED_BLOCKS_FILENAME, self.my_node_id))
             .expect("Could not find Blockchain file");
 
-
         let blocks: Vec<&NotarizedBlock> = self.nodes.iter()
             .filter(|notarized| notarized.block.iteration <= iteration && notarized.block.iteration > self.finalized_height)
             .collect();
 
         for notarized in blocks {
-            writeln!(file, "Iteration: {} | Length: {} | Transactions: {:?}", notarized.block.iteration, notarized.block.length, notarized.block.transactions)
-                .expect("Error writing block to file");
+            let block_data = to_string(&notarized).expect("Failed to serialize Block");
+            writeln!(file, "{}", block_data).expect("Error writing block to file");
         }
+
         self.finalized_height = iteration;
         self.nodes.retain(|notarized| notarized.block.iteration >= iteration);
+    }
+
+    fn get_finalized_block(&self, length: u32) -> Option<NotarizedBlock> {
+        let file = File::open(format!("{}{}", FINALIZED_BLOCKS_FILENAME, self.my_node_id)).expect("Could not find Blockchain file");
+        let reader = BufReader::new(file);
+        let block_line = reader.lines().nth((length - 1) as usize);
+        match block_line {
+            Some(Ok(line)) => {
+                match serde_json::from_str(&line) {
+                    Ok(block) => Some(block),
+                    _ => None
+                }
+            }
+            _ => None
+        }
     }
 
     pub fn print(&self) {

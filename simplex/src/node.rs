@@ -1,4 +1,4 @@
-use crate::block::{NotarizedBlock, SimplexBlock};
+use crate::block::NotarizedBlock;
 use crate::blockchain::Blockchain;
 use crate::message::{Finalize, Propose, Reply, Request, SimplexMessage, Timeout, View, Vote};
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey, ED25519};
@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{self, Duration};
 
 const INITIAL_ITERATION: u32 = 1;
@@ -25,7 +25,7 @@ pub struct SimplexNode {
     environment: Environment,
     iteration: Arc<AtomicU32>,
     is_timeout: Arc<AtomicBool>,
-    blocks: HashMap<u32, SimplexBlock>,
+    proposes: HashMap<u32, bool>,
     votes: HashMap<HashedBlock, Vec<(SimplexMessage, Signature, NodeId)>>,
     timeouts: HashMap<u32, Vec<NodeId>>,
     finalizes: HashMap<u32, Vec<NodeId>>,
@@ -47,7 +47,7 @@ impl SimplexNode {
             environment,
             iteration: Arc::new(AtomicU32::new(INITIAL_ITERATION)),
             is_timeout: Arc::new(AtomicBool::new(false)),
-            blocks: HashMap::new(),
+            proposes: HashMap::new(),
             votes: HashMap::new(),
             timeouts: HashMap::new(),
             finalizes: HashMap::new(),
@@ -128,9 +128,10 @@ impl SimplexNode {
                 }
 
                 Some(_) = iter_rx.recv() => {
-                    self.is_timeout.store(false, Ordering::SeqCst);
                     let iteration = self.iteration.load(Ordering::SeqCst);
                     let leader = self.get_leader(iteration);
+                    self.is_timeout.store(false, Ordering::SeqCst);
+                    self.timeouts.retain(|iter, _| *iter > iteration);
                     println!("----------------------");
                     println!("----------------------");
                     println!("Leader is node {} | Iteration: {}", leader, iteration);
@@ -177,8 +178,8 @@ impl SimplexNode {
     }
 
     async fn handle_propose(&mut self, propose: Propose, sender: u32, leader: u32, iteration: u32, connections: &mut Vec<TcpStream>) {
-        if !self.blocks.contains_key(&propose.content.iteration) && sender == leader && iteration == propose.content.iteration {
-            self.blocks.insert(propose.content.iteration, propose.content.clone());
+        if !self.proposes.contains_key(&propose.content.iteration) && sender == leader && iteration == propose.content.iteration {
+            self.proposes.insert(propose.content.iteration, true);
             if self.blockchain.is_extendable(&propose.content) {
                 let vote = SimplexMessage::Vote(Vote { content: propose.content });
                 broadcast(&self.private_key, connections, vote).await;
@@ -251,26 +252,22 @@ impl SimplexNode {
         }
     }
 
-    async fn handle_finalize(&mut self, finalize: Finalize, sender: NodeId, connections: &mut Vec<TcpStream>) { //TODO: clear data
+    async fn handle_finalize(&mut self, finalize: Finalize, sender: NodeId, connections: &mut Vec<TcpStream>) {
         let finalizes = self.finalizes.entry(finalize.iter).or_insert_with(Vec::new);
         let is_first_finalize = !finalizes.iter().any(|node_id| *node_id == sender);
         if is_first_finalize {
             finalizes.push(sender);
             if finalizes.len() == self.environment.nodes.len() * 2 / 3 + 1 {
-                match self.blocks.get(&finalize.iter) {
-                    Some(_) => {
-                        if let Some(_) = self.blockchain.get_block(finalize.iter) {
-                            self.blockchain.finalize(finalize.iter);
-                        } else {
-                            self.blockchain.add_to_be_finalized(finalize.iter);
-                            self.request(sender, connections).await;
-                        }
-                    },
-                    None => {
-                        self.blockchain.add_to_be_finalized(finalize.iter);
-                        self.request(sender, connections).await;
-                    },
-                };
+                if let Some(_) = self.blockchain.get_block(finalize.iter) {
+                    self.blockchain.finalize(finalize.iter);
+                    // clear data
+                    self.proposes.retain(|iteration, _| *iteration > finalize.iter);
+                    self.votes.retain(|_, signatures| signatures.len() >= self.environment.nodes.len() * 2 / 3 + 1);
+                    self.finalizes.retain(|iteration, _| *iteration > finalize.iter);
+                } else {
+                    self.blockchain.add_to_be_finalized(finalize.iter);
+                    self.request(sender, connections).await;
+                }
             }
         }
     }
@@ -336,17 +333,11 @@ impl SimplexNode {
     }
 
     async fn handle_request(&mut self, request: Request, connections: &mut Vec<TcpStream>, sender: NodeId) {
-        let blocks = self.blockchain.get_missing(request.last_notarized);
-        match blocks {
-            Some(missing) => {
-                // send missing blocks to the process which requested the blocks
-                if let Some(sender_node) = self.environment.nodes.iter().find(|node| node.id == sender) {
-                    if let Some(stream) = connections.iter_mut().find(|stream | stream.peer_addr().unwrap().to_string() == format!("{}:{}", sender_node.host, sender_node.port)) {
-                        unicast(&self.private_key, stream, SimplexMessage::Reply(Reply { blocks: missing })).await;
-                    }
-                }
+        let missing = self.blockchain.get_missing(&request.last_notarized);
+        if let Some(sender_node) = self.environment.nodes.iter().find(|node| node.id == sender) {
+            if let Some(stream) = connections.iter_mut().find(|stream | stream.peer_addr().unwrap().to_string() == format!("{}:{}", sender_node.host, sender_node.port)) {
+                unicast(&self.private_key, stream, SimplexMessage::Reply(Reply { blocks: missing })).await;
             }
-            None => {}
         }
     }
 
