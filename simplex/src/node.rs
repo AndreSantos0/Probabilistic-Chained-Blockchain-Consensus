@@ -4,7 +4,7 @@ use crate::message::{Finalize, Propose, Reply, Request, SimplexMessage, Timeout,
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey, ED25519};
 use serde_json::to_string;
 use sha1::{Digest, Sha1};
-use shared::connection::{accept_connections, broadcast, connect, unicast, NodeId, Signature};
+use shared::connection::{accept_connections, broadcast, connect, notify, unicast, NodeId, Signature};
 use shared::domain::environment::Environment;
 use shared::transaction_generator::TransactionGenerator;
 use std::collections::HashMap;
@@ -204,9 +204,8 @@ impl SimplexNode {
             if vote_signatures.len() == self.environment.nodes.len() * 2 / 3 + 1 {
                 let block = vote.content.clone();
                 let iteration = vote.content.iteration;
-                let length = vote.content.length;
                 let is_added = self.blockchain.add_block(vote.content, vote_signatures.to_vec());
-                if length == self.iteration.load(Ordering::SeqCst) && is_added {
+                if iteration == self.iteration.load(Ordering::SeqCst) && is_added {
                     self.iteration.fetch_add(1, Ordering::SeqCst);
                     match reset_tx.send(()).await {
                         Ok(_) => {}
@@ -221,7 +220,7 @@ impl SimplexNode {
                         broadcast(&self.private_key, connections, finalize).await;
                     }
                     let view = SimplexMessage::View(View { last_notarized: NotarizedBlock { block, signatures: vote_signatures.to_vec() } });
-                    broadcast(&self.private_key, connections, view).await;
+                    notify(&self.private_key, connections, view, &self.environment.my_node.host, self.environment.my_node.port).await;
                 }
 
                 if !is_added {
@@ -302,14 +301,15 @@ impl SimplexNode {
                     }
                 }
             }
-            // ask for missing blocks to a process which notarized the block
+            let iteration = view.last_notarized.block.iteration;
+            self.votes.insert(Blockchain::hash(&view.last_notarized.block), view.last_notarized.signatures.clone());
+            let vote = SimplexMessage::Vote(Vote { content: view.last_notarized.block.clone() });
+            broadcast(&self.private_key, connections, vote).await;
+            //ask for missing blocks to a process which notarized the block
             if self.blockchain.is_extendable(&view.last_notarized.block) {
                 // If view block has length + 1, skip request phase and add it
-                let notarized = view.last_notarized.clone();
-                let iteration = notarized.block.iteration;
-                let length = notarized.block.length;
-                let is_added = self.blockchain.add_block(view.last_notarized.block, view.last_notarized.signatures);
-                if length == self.iteration.load(Ordering::SeqCst) && is_added {
+                let is_added = self.blockchain.add_block(view.last_notarized.block.clone(), view.last_notarized.signatures.clone());
+                if iteration == self.iteration.load(Ordering::SeqCst) && is_added {
                     self.iteration.fetch_add(1, Ordering::SeqCst);
                     match reset_tx.send(()).await {
                         Ok(_) => {}
@@ -323,8 +323,8 @@ impl SimplexNode {
                         let finalize = SimplexMessage::Finalize(Finalize { iter: iteration });
                         broadcast(&self.private_key, connections, finalize).await;
                     }
-                    let view = SimplexMessage::View(View { last_notarized: NotarizedBlock { block: notarized.block, signatures: notarized.signatures } });
-                    broadcast(&self.private_key, connections, view).await;
+                    let view = SimplexMessage::View(View { last_notarized: NotarizedBlock { block: view.last_notarized.block, signatures: view.last_notarized.signatures } });
+                    notify(&self.private_key, connections, view, &self.environment.my_node.host, self.environment.my_node.port).await;
                 }
             } else {
                 self.request(sender, connections).await;
@@ -371,10 +371,9 @@ impl SimplexNode {
                     }
                 }
                 let iteration = notarized.block.iteration;
-                let length = notarized.block.length;
                 let block = notarized.clone();
                 let is_added = self.blockchain.add_block(notarized.block, notarized.signatures);
-                if length == self.iteration.load(Ordering::SeqCst) && is_added {
+                if iteration == self.iteration.load(Ordering::SeqCst) && is_added {
                     self.iteration.fetch_add(1, Ordering::SeqCst);
                     match reset_tx.send(()).await {
                         Ok(_) => {}
@@ -389,7 +388,7 @@ impl SimplexNode {
                         broadcast(&self.private_key, connections, finalize).await;
                     }
                     let view = SimplexMessage::View(View { last_notarized: NotarizedBlock { block: block.block, signatures: block.signatures } });
-                    broadcast(&self.private_key, connections, view).await;
+                    notify(&self.private_key, connections, view, &self.environment.my_node.host, self.environment.my_node.port).await;
                 }
             }
         }
