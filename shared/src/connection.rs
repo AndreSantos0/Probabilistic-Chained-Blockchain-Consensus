@@ -117,7 +117,6 @@ async fn handle_connection<M>(
             },
             Err(_) => {
                 println!("Signature verification failed.");
-                return;
             }
         }
     }

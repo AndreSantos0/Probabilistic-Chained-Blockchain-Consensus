@@ -1,13 +1,29 @@
+use std::hash::{Hash, Hasher};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Hash, Eq, PartialEq, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Transaction {
     pub sender: u32,
     pub id: u32,
-    pub amount: f64,
+    pub amount: Amount,
+}
+
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+pub struct Amount {
+    integral: u64,
+    fractional: u64
+}
+
+impl Amount {
+    pub fn new(i: u64, f: u64) -> Amount {
+        Amount {
+            integral: i,
+            fractional: f
+        }
+    }
 }
 
 impl Transaction {
-    pub fn new(sender: u32, id: u32, amount: f64) -> Transaction {
+    pub fn new(sender: u32, id: u32, amount: Amount) -> Transaction {
         Transaction {
             sender,
             id,

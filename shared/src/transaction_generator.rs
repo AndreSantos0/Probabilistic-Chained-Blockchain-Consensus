@@ -1,11 +1,12 @@
 use rand::Rng;
-use crate::domain::transaction::Transaction;
+use crate::domain::transaction::{Amount, Transaction};
 
 
 const INITIAL_NONCE: u32 = 1;
 const MAX_LIST_SIZE: usize = 5;
 const MIN_LIST_SIZE: usize = 1;
-const DEFAULT_AMOUNT: f64 = 50.0;
+const DEFAULT_AMOUNT_INTEGRAL: u64 = 50;
+const DEFAULT_AMOUNT_FRACTIONAL: u64 = 0;
 const LARGE_PRIME: u32 = 1_000_003;
 
 pub struct TransactionGenerator {
@@ -27,7 +28,7 @@ impl TransactionGenerator {
         for _ in 0..list_size {
             let id = sender * LARGE_PRIME + self.nonce;
             self.nonce += 1;
-            transactions.push(Transaction::new(sender, id, DEFAULT_AMOUNT));
+            transactions.push(Transaction::new(sender, id, Amount::new(DEFAULT_AMOUNT_INTEGRAL, DEFAULT_AMOUNT_FRACTIONAL)));
         }
 
         transactions
