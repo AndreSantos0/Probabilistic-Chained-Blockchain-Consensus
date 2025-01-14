@@ -3,7 +3,6 @@ use crate::message::{Propose, StreamletMessage, Vote};
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 use ring::signature::Ed25519KeyPair;
-use shared::connection::{accept_connections, broadcast, connect, NodeId, Signature};
 use shared::domain::environment::Environment;
 use shared::transaction_generator::TransactionGenerator;
 use std::collections::HashMap;
@@ -14,6 +13,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
 use tokio::time;
+use crate::connection::{accept_connections, broadcast, connect, NodeId, Signature};
 
 const SEED: u64 = 0xFF6DA736EA;
 const INITIAL_EPOCH: u32 = 0;
@@ -51,7 +51,6 @@ impl StreamletNode {
             private_key
         }
     }
-
 
     pub async fn start_streamlet(mut self) {
         let address = format!("{}:{}", self.environment.my_node.host, self.environment.my_node.port);

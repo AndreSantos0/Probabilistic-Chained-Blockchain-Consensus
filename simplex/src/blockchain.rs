@@ -2,14 +2,13 @@ use std::fs::{File, OpenOptions};
 use serde_json::to_string;
 use sha1::{Digest, Sha1};
 use shared::domain::transaction::Transaction;
-use crate::block::{NotarizedBlock, SimplexBlock};
+use crate::block::{HashedSimplexBlock, NotarizedBlock, SimplexBlock, VoteSignature};
 use std::io::{BufRead, BufReader, Write};
-use shared::connection::{NodeId, Signature};
-use crate::message::SimplexMessage;
 
 const GENESIS_ITERATION: u32 = 0;
 const GENESIS_LENGTH: u32 = 0;
-const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks.ndjson";
+const INITIAL_FINALIZED_HEIGHT: u32 = 0;
+const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks_";
 
 
 pub struct Blockchain {
@@ -24,40 +23,40 @@ impl Blockchain {
 
     pub fn new(my_node_id: u32) -> Self {
         let mut block_nodes = Vec::new();
-        block_nodes.push(NotarizedBlock { block: Self::genesis_block(), signatures: Vec::new() });
-        Blockchain { nodes: block_nodes, my_node_id, to_be_finalized: Vec::new(), delayed_notarized: Vec::new(), finalized_height: 0 }
+        block_nodes.push(NotarizedBlock { block: Self::genesis_block(), signatures: Vec::new(), transactions: Vec::new() });
+        Blockchain { nodes: block_nodes, my_node_id, to_be_finalized: Vec::new(), delayed_notarized: Vec::new(), finalized_height: INITIAL_FINALIZED_HEIGHT }
     }
 
-    fn genesis_block() -> SimplexBlock {
-        SimplexBlock::new(None, GENESIS_ITERATION, GENESIS_LENGTH, Vec::new())
+    fn genesis_block() -> HashedSimplexBlock {
+        HashedSimplexBlock { hash: None, iteration: GENESIS_ITERATION, length: GENESIS_LENGTH, transactions: Vec::new() }
     }
 
-    pub fn last(&self) -> SimplexBlock {
+    pub fn last_notarized_length(&self) -> u32 {
         match self.nodes.last() {
-            Some(notarized) => notarized.block.clone(),
-            None => Self::genesis_block(),
+            Some(notarized) => notarized.block.length,
+            None => GENESIS_LENGTH,
         }
     }
 
     fn last_notarized(&self) -> NotarizedBlock {
         match self.nodes.last() {
             Some(notarized) => notarized.clone(),
-            None => NotarizedBlock { block: Self::genesis_block(), signatures: Vec::new() },
+            None => NotarizedBlock { block: Self::genesis_block(), signatures: Vec::new(), transactions: Vec::new() },
         }
     }
 
     pub fn hash(block: &NotarizedBlock) -> Vec<u8> {
-        let block_data = to_string(block).expect("Failed to serialize Block");
+        let block_data = to_string(&block.block).expect("Failed to serialize Block");
         let mut hasher = Sha1::new();
         hasher.update(block_data.as_bytes());
         hasher.finalize().to_vec()
     }
 
-    pub fn get_block(&self, iteration: u32) -> Option<&SimplexBlock> {
+    pub fn has_block(&self, iteration: u32) -> bool {
         let notarized = self.nodes.iter().find(|notarized| notarized.block.iteration == iteration);
         match notarized {
-            None => None,
-            Some(notarized) => Some(&notarized.block)
+            None => false,
+            Some(_) => true,
         }
     }
 
@@ -74,12 +73,12 @@ impl Blockchain {
         }
     }
 
-    pub fn add_block(&mut self, block: SimplexBlock, mut signatures: Vec<(SimplexMessage, Signature, NodeId)>) -> bool {
+    pub fn add_block(&mut self, block: HashedSimplexBlock, transactions: Vec<Transaction>, mut signatures: Vec<VoteSignature>) -> bool {
         let last = self.last_notarized();
         if Some(Blockchain::hash(&last)) == block.hash && block.iteration > last.block.iteration && block.length == last.block.length + 1 {
             let iteration = block.iteration;
-            signatures.sort_by(|a, b| a.2.cmp(&b.2));
-            self.nodes.push(NotarizedBlock { block, signatures });
+            signatures.sort_by(|a, b| a.node.cmp(&b.node));
+            self.nodes.push(NotarizedBlock { block, signatures, transactions });
             if self.to_be_finalized.contains(&iteration) {
                 self.finalize(iteration);
                 self.to_be_finalized.retain(|iter| *iter != iteration);
@@ -103,7 +102,7 @@ impl Blockchain {
             true
         } else {
             if self.is_delayed(block.length) {
-                self.delayed_notarized.push(NotarizedBlock { block, signatures });
+                self.delayed_notarized.push(NotarizedBlock { block, signatures, transactions });
             }
             false
         }
@@ -115,14 +114,14 @@ impl Blockchain {
     }
 
     pub fn is_missing(&self, length_observed: u32) -> bool {
-        let last = self.last();
-        last.length < length_observed
+        let last = self.last_notarized();
+        last.block.length < length_observed
     }
 
     pub fn get_missing(&self, from: u32) -> Vec<NotarizedBlock> {
         let mut missing = Vec::new();
-        let last = self.last();
-        for length in from + 1 ..= last.length {
+        let last = self.last_notarized();
+        for length in from + 1 ..= last.block.length {
             match self.nodes.iter().find(|notarized| notarized.block.length == length) {
                 Some(notarized) => {
                     missing.push(notarized.clone());
@@ -151,7 +150,7 @@ impl Blockchain {
             .write(true)
             .create(true)
             .append(true)
-            .open(format!("{}{}", FINALIZED_BLOCKS_FILENAME, self.my_node_id))
+            .open(format!("{}{}.ndjson", FINALIZED_BLOCKS_FILENAME, self.my_node_id))
             .expect("Could not find Blockchain file");
 
         let blocks: Vec<&NotarizedBlock> = self.nodes.iter()
@@ -168,7 +167,7 @@ impl Blockchain {
     }
 
     fn get_finalized_block(&self, length: u32) -> Option<NotarizedBlock> {
-        let file = File::open(format!("{}{}", FINALIZED_BLOCKS_FILENAME, self.my_node_id)).expect("Could not find Blockchain file");
+        let file = File::open(format!("{}{}.ndjson", FINALIZED_BLOCKS_FILENAME, self.my_node_id)).expect("Could not find Blockchain file");
         let reader = BufReader::new(file);
         let block_line = reader.lines().nth((length - 1) as usize);
         match block_line {

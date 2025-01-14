@@ -2,6 +2,7 @@ mod node;
 mod blockchain;
 mod message;
 mod block;
+mod connection;
 
 use std::env;
 use chrono::{Local, Timelike};

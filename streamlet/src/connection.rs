@@ -8,7 +8,7 @@ use serde_json::{from_slice, to_string};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::Sender;
-use crate::domain::node::Node;
+use shared::domain::node::Node;
 
 const MESSAGE_BYTES_LENGTH: usize = 4;
 const MESSAGE_SIGNATURE_BYTES_LENGTH: usize = 64;

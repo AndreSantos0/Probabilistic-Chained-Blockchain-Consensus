@@ -1,4 +1,4 @@
-use std::hash::{Hash, Hasher};
+use std::hash::{Hash};
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Transaction {
@@ -7,7 +7,7 @@ pub struct Transaction {
     pub amount: Amount,
 }
 
-#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+#[derive(Hash, Eq, PartialEq, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Amount {
     integral: u64,
     fractional: u64

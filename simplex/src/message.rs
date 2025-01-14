@@ -1,4 +1,4 @@
-use crate::block::{HashedNotarizedBlock, HashedSimplexBlock, NotarizedBlock, SimplexBlock};
+use crate::block::{HashedNotarizedBlock, NotarizedBlock, SimplexBlock};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Propose {
@@ -8,6 +8,7 @@ pub struct Propose {
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Vote {
     pub content: SimplexBlock,
+    pub signature: Vec<u8>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
@@ -27,7 +28,7 @@ pub struct View {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Request {
-    pub last_notarized: HashedSimplexBlock,
+    pub last_notarized_length: u32,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
