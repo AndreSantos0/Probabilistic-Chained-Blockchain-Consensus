@@ -1,6 +1,6 @@
 use std::hash::Hash;
 use serde_json::to_string;
-use sha1::{Digest, Sha1};
+use sha2::{Digest, Sha256};
 use shared::domain::transaction::Transaction;
 
 
@@ -44,7 +44,7 @@ pub struct HashedSimplexBlock {
 impl From<&SimplexBlock> for HashedSimplexBlock {
     fn from(block: &SimplexBlock) -> Self {
         let transactions_data = to_string(&block.transactions).expect("Failed to serialize Block transactions");
-        let mut hasher = Sha1::new();
+        let mut hasher = Sha256::new();
         hasher.update(transactions_data.as_bytes());
         let hashed_transactions = hasher.finalize().to_vec();
         HashedSimplexBlock { hash: block.hash.clone(), iteration: block.iteration, length: block.length, transactions: hashed_transactions }

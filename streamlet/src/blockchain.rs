@@ -1,7 +1,7 @@
 use std::fs::{OpenOptions};
 use std::io::Write;
 use serde_json::to_string;
-use sha1::{Digest, Sha1};
+use sha2::{Digest, Sha256};
 use shared::domain::transaction::Transaction;
 use crate::block::StreamletBlock;
 
@@ -31,7 +31,7 @@ impl Blockchain {
 
     fn hash(block: &StreamletBlock) -> Vec<u8> {
         let block_data = to_string(block).expect("Failed to serialize Block");
-        let mut hasher = Sha1::new();
+        let mut hasher = Sha256::new();
         hasher.update(block_data.as_bytes());
         hasher.finalize().to_vec()
     }

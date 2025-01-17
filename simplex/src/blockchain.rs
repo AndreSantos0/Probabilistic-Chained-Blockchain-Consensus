@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions};
 use serde_json::to_string;
-use sha1::{Digest, Sha1};
+use sha2::{Digest, Sha256};
 use shared::domain::transaction::Transaction;
 use crate::block::{HashedSimplexBlock, NotarizedBlock, SimplexBlock, VoteSignature};
 use std::io::{BufRead, BufReader, Write};
@@ -47,7 +47,7 @@ impl Blockchain {
 
     pub fn hash(block: &NotarizedBlock) -> Vec<u8> {
         let block_data = to_string(&block.block).expect("Failed to serialize Block");
-        let mut hasher = Sha1::new();
+        let mut hasher = Sha256::new();
         hasher.update(block_data.as_bytes());
         hasher.finalize().to_vec()
     }

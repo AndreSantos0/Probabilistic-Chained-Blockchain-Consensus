@@ -4,7 +4,7 @@ use crate::connection::{accept_connections, broadcast, connect, notify, unicast}
 use crate::message::{Finalize, Propose, Reply, Request, SimplexMessage, Timeout, View, Vote};
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey, ED25519};
 use serde_json::to_string;
-use sha1::{Digest, Sha1};
+use sha2::{Digest, Sha256};
 use shared::domain::environment::Environment;
 use shared::transaction_generator::TransactionGenerator;
 use std::collections::HashMap;
@@ -160,7 +160,7 @@ impl SimplexNode {
         if iteration == 0 {
             return 0;
         }
-        let mut hasher = Sha1::new();
+        let mut hasher = Sha256::new();
         hasher.update(&iteration.to_le_bytes());
         let hash = hasher.finalize();
         let hash_u64 = u64::from_le_bytes(hash[0..8].try_into().expect("Invalid slice length"));
