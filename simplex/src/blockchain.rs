@@ -1,9 +1,9 @@
-use std::fs::{File, OpenOptions};
+use tokio::fs::{File, OpenOptions};
 use serde_json::to_string;
 use sha2::{Digest, Sha256};
 use shared::domain::transaction::Transaction;
 use crate::block::{HashedSimplexBlock, NotarizedBlock, SimplexBlock, VoteSignature};
-use std::io::{BufRead, BufReader, Write};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 const GENESIS_ITERATION: u32 = 0;
 const GENESIS_LENGTH: u32 = 0;
@@ -38,7 +38,7 @@ impl Blockchain {
         }
     }
 
-    fn last_notarized(&self) -> NotarizedBlock {
+    pub fn last_notarized(&self) -> NotarizedBlock {
         match self.nodes.last() {
             Some(notarized) => notarized.clone(),
             None => NotarizedBlock { block: Self::genesis_block(), signatures: Vec::new(), transactions: Vec::new() },
@@ -67,20 +67,19 @@ impl Blockchain {
     }
 
     fn is_delayed(&self, length: u32) -> bool {
-        match self.nodes.iter().find(|notarized| notarized.block.length == length) {
-            None => false,
-            Some(_) => true
-        }
+        let last = self.last_notarized();
+        length > last.block.length + 1
     }
 
-    pub fn add_block(&mut self, block: HashedSimplexBlock, transactions: Vec<Transaction>, mut signatures: Vec<VoteSignature>) -> bool {
+    pub async fn add_block(&mut self, block: HashedSimplexBlock, transactions: Vec<Transaction>, signatures: Vec<VoteSignature>) -> (u32, bool) {
         let last = self.last_notarized();
+        let mut n_added = 0;
         if Some(Blockchain::hash(&last)) == block.hash && block.iteration > last.block.iteration && block.length == last.block.length + 1 {
             let iteration = block.iteration;
-            signatures.sort_by(|a, b| a.node.cmp(&b.node));
             self.nodes.push(NotarizedBlock { block, signatures, transactions });
+            n_added += 1;
             if self.to_be_finalized.contains(&iteration) {
-                self.finalize(iteration);
+                self.finalize(iteration).await;
                 self.to_be_finalized.retain(|iter| *iter != iteration);
             }
             while !self.delayed_notarized.is_empty() {
@@ -90,8 +89,9 @@ impl Blockchain {
                         let delayed_block = self.delayed_notarized.remove(0);
                         let iteration = delayed_block.block.iteration;
                         self.nodes.push(delayed_block);
+                        n_added += 1;
                         if self.to_be_finalized.contains(&iteration) {
-                            self.finalize(iteration);
+                            self.finalize(iteration).await;
                             self.to_be_finalized.retain(|iter| *iter != iteration);
                         }
                     } else {
@@ -99,12 +99,13 @@ impl Blockchain {
                     }
                 } // else is impossible
             }
-            true
+            (n_added, false)
         } else {
             if self.is_delayed(block.length) {
                 self.delayed_notarized.push(NotarizedBlock { block, signatures, transactions });
+                return (n_added, true)
             }
-            false
+            (n_added, false)
         }
     }
 
@@ -118,7 +119,7 @@ impl Blockchain {
         last.block.length < length_observed
     }
 
-    pub fn get_missing(&self, from: u32) -> Vec<NotarizedBlock> {
+    pub async fn get_missing(&self, from: u32) -> Vec<NotarizedBlock> {
         let mut missing = Vec::new();
         let last = self.last_notarized();
         for length in from + 1 ..= last.block.length {
@@ -127,7 +128,7 @@ impl Blockchain {
                     missing.push(notarized.clone());
                 }
                 None => {
-                    match self.get_finalized_block(length) {
+                    match self.get_finalized_block(length).await {
                         Some(notarized) => {
                             missing.push(notarized);
                         }
@@ -145,45 +146,65 @@ impl Blockchain {
         self.to_be_finalized.push(iteration);
     }
 
-    pub fn finalize(&mut self, iteration: u32) {
+    pub async fn finalize(&mut self, iteration: u32) {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
             .append(true)
             .open(format!("{}{}.ndjson", FINALIZED_BLOCKS_FILENAME, self.my_node_id))
-            .expect("Could not find Blockchain file");
+            .await.expect("Could not find Blockchain file");
 
         let blocks: Vec<&NotarizedBlock> = self.nodes.iter()
             .filter(|notarized| notarized.block.iteration <= iteration && notarized.block.iteration > self.finalized_height)
             .collect();
 
         for notarized in blocks {
-            let block_data = to_string(&notarized).expect("Failed to serialize Block");
-            writeln!(file, "{}", block_data).expect("Error writing block to file");
+            let block_data = to_string(&notarized).expect("Failed to serialize Block") + "\n";
+            file.write_all(block_data.as_bytes()).await.expect("Error writing block to file");
         }
 
         self.finalized_height = iteration;
         self.nodes.retain(|notarized| notarized.block.iteration >= iteration);
     }
 
-    fn get_finalized_block(&self, length: u32) -> Option<NotarizedBlock> {
-        let file = File::open(format!("{}{}.ndjson", FINALIZED_BLOCKS_FILENAME, self.my_node_id)).expect("Could not find Blockchain file");
+    async fn get_finalized_block(&self, length: u32) -> Option<NotarizedBlock> {
+        let file = File::open(format!("{}{}.ndjson", FINALIZED_BLOCKS_FILENAME, self.my_node_id)).await.expect("Could not find Blockchain file");
         let reader = BufReader::new(file);
-        let block_line = reader.lines().nth((length - 1) as usize);
-        match block_line {
-            Some(Ok(line)) => {
-                match serde_json::from_str(&line) {
-                    Ok(block) => Some(block),
-                    _ => None
-                }
+        let mut lines = reader.lines();
+        let mut current_index = 0;
+        while let Some(line) = lines.next_line().await.unwrap_or(None) {
+            if current_index == (length - 1) {
+                return serde_json::from_str(&line).ok();
             }
-            _ => None
+            current_index += 1;
         }
+        None
     }
 
     pub fn print(&self) {
         for notarized in self.nodes.iter() {
             println!("[Iteration: {} | Length: {}]", notarized.block.iteration, notarized.block.length);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn read_finalize_file() {
+        let length = 1;
+        let file = File::open(format!("{}.ndjson", FINALIZED_BLOCKS_FILENAME)).await.expect("Could not find Blockchain file");
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        let mut current_index = 0;
+        while let Some(line) = lines.next_line().await.unwrap_or(None) {
+            if current_index == (length - 1) {
+                println!("{:?}", serde_json::from_str::<NotarizedBlock>(&line).ok().unwrap());
+                return;
+            }
+            current_index += 1;
         }
     }
 }

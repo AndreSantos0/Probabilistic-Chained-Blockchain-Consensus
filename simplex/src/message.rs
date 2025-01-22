@@ -1,4 +1,4 @@
-use crate::block::{HashedNotarizedBlock, NotarizedBlock, SimplexBlock};
+use crate::block::{ViewBlock, NotarizedBlock, SimplexBlock};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Propose {
@@ -23,7 +23,7 @@ pub struct Finalize {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct View {
-    pub last_notarized: HashedNotarizedBlock,
+    pub last_notarized: ViewBlock,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]

@@ -52,7 +52,7 @@ impl From<&SimplexBlock> for HashedSimplexBlock {
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
-pub struct HashedNotarizedBlock {
+pub struct ViewBlock {
     pub block: HashedSimplexBlock,
     pub signatures: Vec<VoteSignature>,
 }
