@@ -20,13 +20,13 @@ impl SimplexBlock {
     }
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+#[derive(Hash, Eq, PartialEq, Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct VoteSignature {
     pub signature: Vec<u8>,
     pub node: NodeId,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+#[derive(Hash, Eq, PartialEq, Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct NotarizedBlock {
     pub block: HashedSimplexBlock,
     pub signatures: Vec<VoteSignature>,

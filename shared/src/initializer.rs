@@ -16,7 +16,7 @@ pub const SECONDS_PER_HOUR: u32 = 3600;
 pub const SECONDS_PER_MINUTE: u32 = 60;
 pub const ADD_ONE_MINUTE: u32 = 1;
 pub const ADD_ONE_HOUR: u32 = 1;
-pub const N_PROGRAM_ARGS: usize = 3;
+pub const N_PROGRAM_ARGS: usize = 4;
 pub const MY_NODE_ID_ARG_POS: usize = 1;
 pub const NODES_FILENAME_ARG_POS: usize = 2;
 pub const PUBLIC_KEYS_FILENAME: &str = "./shared/public_keys.toml";
@@ -26,9 +26,10 @@ pub const PRIVATE_KEY_ENV: &str = "PRIVATE_KEY_";
 
 pub fn get_environment(args: Vec<String>) -> Result<Environment, Box<dyn Error>> {
     if args.len() < N_PROGRAM_ARGS {
-        return Err("Specify Node Id and nodes´ CSV file [Streamlet_Rust.exe 1 nodes.csv]".into());
+        return Err("Specify Node Id, nodes´ CSV file and alternatively test execution mode (test) [Streamlet_Rust.exe 1 nodes.csv test]".into());
     }
 
+    let test_mode = args.contains(&"test".to_string());
     let my_id = args[MY_NODE_ID_ARG_POS].parse::<u32>()?;
     let file_path = &args[NODES_FILENAME_ARG_POS];
     let nodes = read_nodes_from_csv(file_path)?;
@@ -37,7 +38,7 @@ pub fn get_environment(args: Vec<String>) -> Result<Environment, Box<dyn Error>>
         .ok_or("This process' node was not found")?
         .clone();
 
-    Ok(Environment { my_node, nodes })
+    Ok(Environment { my_node, nodes, test_flag: test_mode })
 }
 
 pub fn read_nodes_from_csv(file_path: &str) -> Result<Vec<Node>, Box<dyn Error>> {

@@ -5,4 +5,5 @@ use crate::domain::node::Node;
 pub struct Environment {
     pub my_node: Node,
     pub nodes: Vec<Node>,
+    pub test_flag: bool,
 }
