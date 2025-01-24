@@ -107,6 +107,20 @@ impl SimplexNode {
         reset_tx: Sender<()>,
         connections: &mut Vec<TcpStream>
     ) {
+        let iteration = self.iteration.load(Ordering::SeqCst);
+        let leader = Self::get_leader(self.environment.nodes.len(), iteration);
+        println!("----------------------");
+        println!("----------------------");
+        println!("Leader is node {} | Iteration: {}", leader, iteration);
+        self.blockchain.print();
+        if leader == self.environment.my_node.id {
+            let iteration = self.iteration.load(Ordering::SeqCst);
+            let transactions = self.transaction_generator.generate(self.environment.my_node.id);
+            let block = self.blockchain.get_next_block(iteration, transactions);
+            println!("Proposed {}", block.length);
+            let message = SimplexMessage::Propose(Propose { content: block });
+            broadcast(&self.private_key, connections, message).await;
+        }
         loop {
             tokio::select! {
                 Some(timeout) = timeout_rx.recv() => {
