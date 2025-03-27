@@ -1,13 +1,14 @@
-use crate::block::{ViewBlock, NotarizedBlock, SimplexBlock};
+use crate::block::{ViewBlock, NotarizedBlock, SimplexBlock, HashedSimplexBlock};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Propose {
     pub content: SimplexBlock,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+#[derive(Eq, Hash, PartialEq, Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Vote {
-    pub content: SimplexBlock,
+    pub iteration: u32,
+    pub header: HashedSimplexBlock,
     pub signature: Vec<u8>,
 }
 
@@ -29,6 +30,7 @@ pub struct View {
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Request {
     pub last_notarized_length: u32,
+    pub curr_iteration: u32,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]

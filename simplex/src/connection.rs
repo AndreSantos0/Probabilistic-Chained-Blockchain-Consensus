@@ -4,7 +4,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{from_slice, to_string};
 use shared::domain::node::Node;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -155,6 +155,45 @@ pub async fn broadcast<M>(
         if let Err(e) = stream.write_all(signature.as_ref()).await {
             eprintln!("Failed to send signature to socket: {}", e);
             connections.remove(i);
+            continue;
+        }
+    }
+}
+
+pub async fn broadcast_to_sample<M>(
+    private_key: &Ed25519KeyPair,
+    connections: &mut Vec<TcpStream>,
+    message: M,
+    sample_set: HashSet<u32>,
+) where M: Serialize {
+    let serialized_message = match to_string(&message) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("Failed to serialize message: {}", e);
+            return;
+        }
+    };
+
+    let serialized_bytes = serialized_message.as_bytes();
+    let length = serialized_bytes.len() as u32;
+    let length_bytes = length.to_be_bytes();
+    let signature = private_key.sign(serialized_bytes);
+
+    for i in sample_set {
+        let stream = &mut connections[i as usize];
+        if let Err(e) = stream.write_all(&length_bytes).await {
+            eprintln!("Failed to send message length to socket: {}", e);
+            connections.remove(i as usize);
+            continue;
+        }
+        if let Err(e) = stream.write_all(serialized_bytes).await {
+            eprintln!("Failed to send message to socket: {}", e);
+            connections.remove(i as usize);
+            continue;
+        }
+        if let Err(e) = stream.write_all(signature.as_ref()).await {
+            eprintln!("Failed to send signature to socket: {}", e);
+            connections.remove(i as usize);
             continue;
         }
     }
