@@ -4,7 +4,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{from_slice, to_string};
 use shared::domain::node::Node;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -164,7 +164,7 @@ pub async fn broadcast_to_sample<M>(
     private_key: &Ed25519KeyPair,
     connections: &mut Vec<TcpStream>,
     message: M,
-    sample_set: HashSet<u32>,
+    sample_set: Vec<u32>,
 ) where M: Serialize {
     let serialized_message = match to_string(&message) {
         Ok(json) => json,

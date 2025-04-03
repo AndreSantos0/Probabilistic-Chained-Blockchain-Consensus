@@ -1,4 +1,4 @@
-use crate::block::{ViewBlock, NotarizedBlock, SimplexBlock, HashedSimplexBlock};
+use crate::block::{HashedSimplexBlock, NotarizedBlock, SimplexBlock};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Propose {
@@ -10,6 +10,8 @@ pub struct Vote {
     pub iteration: u32,
     pub header: HashedSimplexBlock,
     pub signature: Vec<u8>,
+    pub sample: Vec<u32>,
+    pub proof: Vec<u8>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
@@ -20,11 +22,8 @@ pub struct Timeout {
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Finalize {
     pub iter: u32,
-}
-
-#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
-pub struct View {
-    pub last_notarized: ViewBlock,
+    pub sample: Vec<u32>,
+    pub proof: Vec<u8>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
@@ -46,7 +45,6 @@ pub enum SimplexMessage {
     Vote(Vote),
     Timeout(Timeout),
     Finalize(Finalize),
-    View(View),
     Request(Request),
     Reply(Reply),
 }

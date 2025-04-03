@@ -1,7 +1,7 @@
-use crate::block::{HashedSimplexBlock, ViewBlock, VoteSignature};
+use crate::block::{HashedSimplexBlock, VoteSignature};
 use crate::blockchain::Blockchain;
-use crate::connection::{broadcast, connect, notify, unicast};
-use crate::message::{Finalize, Propose, Reply, Request, SimplexMessage, Timeout, View, Vote};
+use crate::connection::{broadcast, broadcast_to_sample, connect, unicast};
+use crate::message::{Finalize, Propose, Reply, Request, SimplexMessage, Timeout, Vote};
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey, ED25519};
 use serde_json::to_string;
 use sha2::{Digest, Sha256};
@@ -14,13 +14,18 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{self, Duration};
+use shared::vrf::{vrf_prove, vrf_verify};
 
 const INITIAL_ITERATION: u32 = 1;
 const ITERATION_TIME: u64 = 10;
 const MESSAGE_CHANNEL_SIZE: usize = 100;
+const CONST_O: f32 = 1.7;
+const CONST_L: f32 = 1.0;
 
 pub struct SimplexNode {
     environment: Environment,
+    quorum_size: usize,
+    sample_size: usize,
     iteration: Arc<AtomicU32>,
     is_timeout: Arc<AtomicBool>,
     proposes: HashMap<u32, Propose>,
@@ -36,8 +41,11 @@ pub struct SimplexNode {
 impl SimplexNode {
     pub fn new(environment: Environment, public_keys: HashMap<u32, Vec<u8>>, private_key: Ed25519KeyPair) -> Self {
         let my_node_id = environment.my_node.id;
+        let n = environment.nodes.len();
         SimplexNode {
             environment,
+            quorum_size: (CONST_L * (n as f32).sqrt()).floor() as usize,
+            sample_size: (CONST_O * CONST_L * (n as f32).sqrt()).floor() as usize,
             iteration: Arc::new(AtomicU32::new(INITIAL_ITERATION)),
             is_timeout: Arc::new(AtomicBool::new(false)),
             proposes: HashMap::new(),
@@ -127,9 +135,17 @@ impl SimplexNode {
                             }
                         };
                         let serialized_bytes = serialized_message.as_bytes();
+                        let n = self.environment.nodes.len();
+                        let next_leader = Self::get_leader(self.environment.nodes.len(), iteration + 1);
+                        let (sample, proof) = vrf_prove(&self.private_key, &format!("{}vote", iteration), self.sample_size, n as u32, next_leader);
+                        let vote = SimplexMessage::Vote(Vote {
+                            iteration, header: block,
+                            signature: Vec::from(self.private_key.sign(serialized_bytes).as_ref()),
+                            sample: sample.clone().into_iter().collect(),
+                            proof
+                        });
+                        broadcast_to_sample(&self.private_key, connections, vote, sample.into_iter().collect()).await;
                         println!("Voted for {}", propose.content.length);
-                        let vote = SimplexMessage::Vote(Vote { iteration, header: block, signature: Vec::from(self.private_key.sign(serialized_bytes).as_ref()) });
-                        broadcast(&self.private_key, connections, vote).await;
                     }
                 }
             }
@@ -137,7 +153,7 @@ impl SimplexNode {
             match self.timeouts.get(&(iteration + 1)) {
                 None => { },
                 Some(timeouts) => {
-                    if timeouts.len() == self.environment.nodes.len() * 2 / 3 + 1 {
+                    if timeouts.len() == self.quorum_size {
                         self.iteration.store(iteration + 1, Ordering::SeqCst);
                         continue
                     }
@@ -154,11 +170,12 @@ impl SimplexNode {
                     ).await;
                     self.iteration.fetch_add(1, Ordering::SeqCst);
                     if !self.is_timeout.load(Ordering::SeqCst) {
-                        let finalize = SimplexMessage::Finalize(Finalize { iter: iteration });
-                        broadcast(&self.private_key, connections, finalize).await;
+                        let n = self.environment.nodes.len();
+                        let next_leader = Self::get_leader(self.environment.nodes.len(), iteration + 1);
+                        let (sample, proof) = vrf_prove(&self.private_key, &format!("{}finalize", iteration), self.sample_size, n as u32, next_leader);
+                        let finalize = SimplexMessage::Finalize(Finalize { iter: iteration, sample: sample.clone().into_iter().collect(), proof});
+                        broadcast_to_sample(&self.private_key, connections, finalize, sample.into_iter().collect()).await;
                     }
-                    let view = SimplexMessage::View(View { last_notarized: ViewBlock { block: notarized.block, signatures: notarized.signatures }});
-                    notify(&self.private_key, connections, view, self.environment.my_node.id).await;
                 }
             }
         }
@@ -187,7 +204,6 @@ impl SimplexNode {
                         SimplexMessage::Vote(vote) => self.handle_vote(vote.clone(), sender, reset_tx.clone(), connections).await,
                         SimplexMessage::Timeout(timeout) => self.handle_timeout(timeout, sender, reset_tx.clone(), connections).await,
                         SimplexMessage::Finalize(finalize) => self.handle_finalize(finalize, sender, connections).await,
-                        SimplexMessage::View(view) => self.handle_view(view, connections, sender).await,
                         SimplexMessage::Request(request) => self.handle_request(request, connections, sender).await,
                         SimplexMessage::Reply(reply) => self.handle_reply(reply, reset_tx.clone(), connections).await,
                     }
@@ -213,7 +229,8 @@ impl SimplexNode {
         if !self.proposes.contains_key(&propose.content.iteration) && sender == leader {
             self.proposes.insert(propose.content.iteration, propose.clone());
             let iteration = self.iteration.load(Ordering::SeqCst);
-            if iteration == propose.content.iteration && !self.is_timeout.load(Ordering::SeqCst) && self.blockchain.is_extendable(&propose.content) {
+            let is_extendable = self.blockchain.is_extendable(&propose.content);
+            if is_extendable && iteration == propose.content.iteration && !self.is_timeout.load(Ordering::SeqCst) {
                 let block = HashedSimplexBlock::from(&propose.content);
                 let serialized_message = match to_string(&block) {
                     Ok(json) => json,
@@ -223,9 +240,21 @@ impl SimplexNode {
                     }
                 };
                 let serialized_bytes = serialized_message.as_bytes();
+                let n = self.environment.nodes.len();
+                let next_leader = Self::get_leader(self.environment.nodes.len(), propose.content.iteration + 1);
+                let (sample, proof) = vrf_prove(&self.private_key, &format!("{}vote", iteration), self.sample_size, n as u32, next_leader);
                 println!("Voted for {}", propose.content.length);
-                let vote = SimplexMessage::Vote(Vote { iteration, header: block, signature: Vec::from(self.private_key.sign(serialized_bytes).as_ref()) });
-                broadcast(&self.private_key, connections, vote).await; //Todo broadcast vote with no signature
+                let vote = SimplexMessage::Vote(Vote {
+                    iteration,
+                    header: block,
+                    signature: Vec::from(self.private_key.sign(serialized_bytes).as_ref()),
+                    sample: sample.clone().into_iter().collect(),
+                    proof
+                });
+                broadcast_to_sample(&self.private_key, connections, vote, sample.into_iter().collect()).await;
+            }
+            if !is_extendable {
+                self.request(sender, connections).await;
             }
         }
     }
@@ -237,9 +266,17 @@ impl SimplexNode {
         reset_tx: Sender<()>,
         connections: &mut Vec<TcpStream>,
     ) {
+        if !vote.sample.contains(&self.environment.my_node.id) {
+            return;
+        }
         println!("Received vote {}", vote.iteration);
         match self.public_keys.get(&sender) {
             Some(key) => {
+                let n = self.environment.nodes.len();
+                let leader = Self::get_leader(n, vote.iteration + 1);
+                if !vrf_verify(key, &format!("{}vote", vote.iteration), self.sample_size, n as u32, leader, vote.sample.into_iter().collect(), &vote.proof) {
+                    return;
+                }
                 let public_key = UnparsedPublicKey::new(&ED25519, key);
                 let serialized_message = match to_string(&vote.header) {
                     Ok(json) => json,
@@ -256,13 +293,14 @@ impl SimplexNode {
             },
             None => return
         }
+
         let vote_signatures = self.votes.entry(vote.header).or_insert_with(Vec::new);
         let is_first_vote = !vote_signatures.iter().any(|vote_signature| vote_signature.node == sender);
         if is_first_vote {
             vote_signatures.push(VoteSignature { signature: vote.signature, node: sender });
             println!("{} signatures", vote_signatures.len());
             let iteration = self.iteration.load(Ordering::SeqCst);
-            if vote_signatures.len() == self.environment.nodes.len() * 2 / 3 + 1 {
+            if vote_signatures.len() == self.quorum_size {
                 match self.proposes.get(&vote.iteration) {
                     None => return,
                     Some(block) => {
@@ -277,11 +315,12 @@ impl SimplexNode {
                             if is_notarized {
                                 self.iteration.fetch_add(1, Ordering::SeqCst);
                                 if !is_timeout {
-                                    let finalize = SimplexMessage::Finalize(Finalize { iter: iteration });
-                                    broadcast(&self.private_key, connections, finalize).await;
+                                    let n = self.environment.nodes.len();
+                                    let leader = Self::get_leader(self.environment.nodes.len(), iteration + 1);
+                                    let (sample, proof) = vrf_prove(&self.private_key, &format!("{}finalize", iteration), self.sample_size, n as u32, leader);
+                                    let finalize = SimplexMessage::Finalize(Finalize { iter: iteration, sample: sample.clone().into_iter().collect(), proof});
+                                    broadcast_to_sample(&self.private_key, connections, finalize, sample.into_iter().collect()).await;
                                 }
-                                let view = SimplexMessage::View(View { last_notarized: ViewBlock { block: HashedSimplexBlock::from(&block.content), signatures: vote_signatures.to_vec() }});
-                                notify(&self.private_key, connections, view, self.environment.my_node.id).await;
                                 self.handle_iteration_advance(connections).await;
                                 let _ = reset_tx.send(()).await;
                             } else {
@@ -317,17 +356,30 @@ impl SimplexNode {
 
     async fn handle_finalize(&mut self, finalize: Finalize, sender: u32, connections: &mut Vec<TcpStream>) {
         println!("Received finalize {}", finalize.iter);
+        if !finalize.sample.contains(&self.environment.my_node.id)  {
+            return;
+        }
+        match self.public_keys.get(&sender) {
+            Some(key) => {
+                let n = self.environment.nodes.len();
+                let leader = Self::get_leader(n, finalize.iter + 1);
+                if !vrf_verify(key, &format!("{}finalize", finalize.iter), self.sample_size, n as u32, leader, finalize.sample.into_iter().collect(), &finalize.proof) {
+                    return;
+                }
+            },
+            None => return
+        }
         let finalizes = self.finalizes.entry(finalize.iter).or_insert_with(Vec::new);
         let is_first_finalize = !finalizes.iter().any(|node_id| *node_id == sender);
         if is_first_finalize {
             finalizes.push(sender);
-            if finalizes.len() == self.environment.nodes.len() * 2 / 3 + 1 {
+            if finalizes.len() == self.quorum_size {
                 if self.blockchain.has_block(finalize.iter) {
                     if !self.environment.test_flag {
                         self.blockchain.finalize(finalize.iter).await;
                     }
                     self.proposes.retain(|iteration, _| *iteration > finalize.iter);
-                    self.votes.retain(|_, signatures| signatures.len() < self.environment.nodes.len() * 2 / 3 + 1);
+                    self.votes.retain(|_, signatures| signatures.len() < self.quorum_size);
                     self.finalizes.retain(|iteration, _| *iteration > finalize.iter);
                 } else {
                     if !self.environment.test_flag {
@@ -339,44 +391,12 @@ impl SimplexNode {
         }
     }
 
-    async fn handle_view(
-        &mut self,
-        view: View,
-        connections: &mut Vec<TcpStream>,
-        sender: u32,
-    ) {
-        println!("Received view {}", view.last_notarized.block.length);
-        if self.blockchain.is_missing(view.last_notarized.block.length, view.last_notarized.block.iteration) && view.last_notarized.signatures.len() >= self.environment.nodes.len() * 2 / 3 + 1 {
-            for vote_signature in view.last_notarized.signatures.iter() {
-                match self.public_keys.get(&vote_signature.node) {
-                    None => return,
-                    Some(key) => {
-                        let public_key = UnparsedPublicKey::new(&ED25519, key);
-                        let serialized_message = match to_string(&view.last_notarized.block) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize message: {}", e);
-                                return;
-                            }
-                        };
-                        let bytes = serialized_message.as_bytes();
-                        match public_key.verify(bytes, vote_signature.signature.as_ref()) {
-                            Ok(_) => { }
-                            Err(_) => {
-                                println!("View signature verification failed");
-                                return
-                            }
-                        }
-                    }
-                }
-            }
-            self.request(sender, connections).await;
-        }
-    }
-
     async fn handle_request(&mut self, request: Request, connections: &mut Vec<TcpStream>, sender: u32) {
         println!("Request received");
         let missing = self.blockchain.get_missing(request.last_notarized_length, request.curr_iteration).await;
+        if missing.is_empty() {
+            return
+        }
         if let Some(sender_node) = self.environment.nodes.iter().find(|node| node.id == sender) {
             if let Some(stream) = connections.get_mut(sender_node.id as usize) {
                 unicast(&self.private_key, stream, SimplexMessage::Reply(Reply { blocks: missing })).await;
@@ -398,7 +418,7 @@ impl SimplexNode {
 
         let mut is_reset = false;
         for notarized in reply.blocks {
-            if self.blockchain.is_missing(notarized.block.length, notarized.block.iteration) && notarized.signatures.len() >= self.environment.nodes.len() * 2 / 3 + 1 {
+            if self.blockchain.is_missing(notarized.block.length, notarized.block.iteration) && notarized.signatures.len() >= self.quorum_size {
                 let transactions_data = to_string(&notarized.transactions).expect("Failed to serialize Block transactions");
                 let mut hasher = Sha256::new();
                 hasher.update(transactions_data.as_bytes());
@@ -438,12 +458,12 @@ impl SimplexNode {
                         is_reset = true;
                         self.iteration.fetch_add(1, Ordering::SeqCst);
                         if !self.is_timeout.load(Ordering::SeqCst) {
-                            let finalize = SimplexMessage::Finalize(Finalize { iter: iteration });
-                            broadcast(&self.private_key, connections, finalize).await;
+                            let n = self.environment.nodes.len();
+                            let leader = Self::get_leader(self.environment.nodes.len(), iteration + 1);
+                            let (sample, proof) = vrf_prove(&self.private_key, &format!("{}finalize", iteration), self.sample_size, n as u32, leader);
+                            let finalize = SimplexMessage::Finalize(Finalize { iter: iteration, sample: sample.clone().into_iter().collect(), proof});
+                            broadcast_to_sample(&self.private_key, connections, finalize, sample.into_iter().collect()).await;
                         }
-                        let last_notarized = self.blockchain.last_notarized();
-                        let view = SimplexMessage::View(View { last_notarized: ViewBlock { block: last_notarized.block, signatures: last_notarized.signatures } });
-                        notify(&self.private_key, connections, view, self.environment.my_node.id).await;
                         self.handle_iteration_advance(connections).await;
                     } else {
                         self.blockchain.add_to_be_notarized(notarized.block, notarized.transactions, notarized.signatures);

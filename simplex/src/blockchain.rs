@@ -124,7 +124,7 @@ impl Blockchain {
                             missing.push(notarized);
                         }
                         None => {
-                            break
+                            continue
                         }
                     }
                 }
@@ -159,7 +159,7 @@ impl Blockchain {
             }
         }
 
-        for notarized in blocks_to_be_finalized {
+        for notarized in blocks_to_be_finalized.iter().rev() {
             let block_data = to_string(&notarized).expect("Failed to serialize Block") + "\n";
             file.write_all(block_data.as_bytes()).await.expect("Error writing block to file");
         }
