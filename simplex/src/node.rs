@@ -377,6 +377,9 @@ impl SimplexNode {
     async fn handle_request(&mut self, request: Request, connections: &mut Vec<TcpStream>, sender: u32) {
         println!("Request received");
         let missing = self.blockchain.get_missing(request.last_notarized_length, request.curr_iteration).await;
+        if missing.is_empty() {
+            return
+        }
         if let Some(sender_node) = self.environment.nodes.iter().find(|node| node.id == sender) {
             if let Some(stream) = connections.get_mut(sender_node.id as usize) {
                 unicast(&self.private_key, stream, SimplexMessage::Reply(Reply { blocks: missing })).await;
