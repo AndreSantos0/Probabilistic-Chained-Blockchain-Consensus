@@ -277,19 +277,6 @@ impl SimplexNode {
                 if !vrf_verify(key, &format!("{}vote", vote.iteration), self.sample_size, n as u32, leader, vote.sample.into_iter().collect(), &vote.proof) {
                     return;
                 }
-                let public_key = UnparsedPublicKey::new(&ED25519, key);
-                let serialized_message = match to_string(&vote.header) {
-                    Ok(json) => json,
-                    Err(e) => {
-                        eprintln!("Failed to serialize hashed block: {}", e);
-                        return;
-                    }
-                };
-                let serialized_bytes = serialized_message.as_bytes();
-                match public_key.verify(serialized_bytes, vote.signature.as_ref()) {
-                    Ok(_) => {}
-                    Err(_) => return
-                };
             },
             None => return
         }
