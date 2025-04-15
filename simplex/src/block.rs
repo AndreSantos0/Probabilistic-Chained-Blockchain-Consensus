@@ -50,3 +50,9 @@ impl From<&SimplexBlock> for HashedSimplexBlock {
         HashedSimplexBlock { hash: block.hash.clone(), iteration: block.iteration, length: block.length, transactions: hashed_transactions }
     }
 }
+
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+pub struct ViewBlock {
+    pub block: HashedSimplexBlock,
+    pub signatures: Vec<VoteSignature>,
+}

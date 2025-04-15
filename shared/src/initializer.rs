@@ -16,23 +16,22 @@ pub const SECONDS_PER_HOUR: u32 = 3600;
 pub const SECONDS_PER_MINUTE: u32 = 60;
 pub const ADD_ONE_MINUTE: u32 = 1;
 pub const ADD_ONE_HOUR: u32 = 1;
-pub const N_PROGRAM_ARGS: usize = 4;
-pub const MY_NODE_ID_ARG_POS: usize = 1;
-pub const NODES_FILENAME_ARG_POS: usize = 2;
-pub const PUBLIC_KEYS_FILENAME: &str = "./shared/public_keys.toml";
-pub const PUBLIC_KEYS_FILE_INDEX: &str = "public_key";
-pub const PRIVATE_KEY_ENV: &str = "PRIVATE_KEY_";
+const N_PROGRAM_ARGS: usize = 2;
+const MY_NODE_ID_ARG_POS: usize = 1;
+const NODES_FILENAME: &str = "./shared/nodes.csv";
+const PUBLIC_KEYS_FILENAME: &str = "./shared/public_keys.toml";
+const PUBLIC_KEYS_FILE_INDEX: &str = "public_key";
+const PRIVATE_KEY_ENV: &str = "PRIVATE_KEY_";
 
 
 pub fn get_environment(args: Vec<String>) -> Result<Environment, Box<dyn Error>> {
     if args.len() < N_PROGRAM_ARGS {
-        return Err("Specify Node Id, nodes´ CSV file and alternatively test execution mode (test) [Streamlet_Rust.exe 1 nodes.csv test]".into());
+        return Err("Specify Node Id and alternatively protocol (probabilistic) and test execution mode (test)".into());
     }
 
-    let test_mode = args.contains(&"test".to_string());
     let my_id = args[MY_NODE_ID_ARG_POS].parse::<u32>()?;
-    let file_path = &args[NODES_FILENAME_ARG_POS];
-    let nodes = read_nodes_from_csv(file_path)?;
+    let nodes = read_nodes_from_csv(NODES_FILENAME)?;
+    let test_mode = args.iter().any(|arg| arg == "test");
 
     let my_node = nodes.iter().find(|node| node.id == my_id)
         .ok_or("This process' node was not found")?

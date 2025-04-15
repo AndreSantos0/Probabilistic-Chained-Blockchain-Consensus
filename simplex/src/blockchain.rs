@@ -31,17 +31,10 @@ impl Blockchain {
         HashedSimplexBlock { hash: None, iteration: GENESIS_ITERATION, length: GENESIS_LENGTH, transactions: Vec::new() }
     }
 
-    pub fn last_notarized_length(&self) -> u32 {
-        match self.notarized.last() {
-            Some(notarized) => notarized.block.length,
-            None => GENESIS_LENGTH,
-        }
-    }
-
-    pub fn last_notarized(&self) -> NotarizedBlock {
-        match self.notarized.last() {
-            Some(notarized) => notarized.clone(),
-            None => NotarizedBlock { block: Self::genesis_block(), signatures: Vec::new(), transactions: Vec::new() },
+    pub fn last_notarized(&self) -> &NotarizedBlock {
+        match self.notarized.iter().max_by_key(|notarized| notarized.block.iteration) {
+            Some(notarized) => notarized,
+            None => panic!("Impossible scenario"),
         }
     }
 
@@ -52,12 +45,8 @@ impl Blockchain {
         hasher.finalize().to_vec()
     }
 
-    pub fn has_block(&self, iteration: u32) -> bool {
-        let notarized = self.notarized.iter().find(|notarized| notarized.block.iteration == iteration);
-        match notarized {
-            None => false,
-            Some(_) => true,
-        }
+    pub fn get_block(&self, iteration: u32) -> Option<&NotarizedBlock> {
+        self.notarized.iter().find(|notarized| notarized.block.iteration == iteration)
     }
 
     pub fn get_next_block(&self, iteration: u32, transactions: Vec<Transaction>) -> SimplexBlock {
@@ -78,56 +67,49 @@ impl Blockchain {
     }
 
     pub fn is_extendable(&self, block: &SimplexBlock) -> bool {
+        let last = self.last_notarized();
         if let Some(_) = self.notarized.iter().find(|notarized|
-            Some(Blockchain::hash(notarized)) == block.hash && block.iteration > notarized.block.iteration && block.length == notarized.block.length + 1
+            Some(Blockchain::hash(notarized)) == block.hash && block.iteration > last.block.iteration && block.length == last.block.length + 1
         ) {
             return true
         }
         false
     }
 
-    pub async fn notarize(&mut self, block: HashedSimplexBlock, transactions: Vec<Transaction>, signatures: Vec<VoteSignature>) -> bool {
-        if let Some(_) = self.notarized.iter().find(|notarized|
-            Some(Blockchain::hash(notarized)) == block.hash &&
-                block.iteration > notarized.block.iteration &&
-                (block.length == notarized.block.length + 1 || block.length == notarized.block.length)
-        ) {
-            let iteration = block.iteration;
-            self.notarized.push(NotarizedBlock { block, signatures, transactions });
-            if self.to_be_finalized.contains(&iteration) {
-                self.finalize(iteration).await;
-                self.to_be_finalized.retain(|iter| *iter != iteration);
-            }
-            return true
+    pub fn find_parent_block(&self, hash: &Option<Vec<u8>>) -> Option<&NotarizedBlock> {
+        self.notarized.iter().find(|notarized| Some(Blockchain::hash(notarized)) == *hash)
+    }
+
+    pub async fn notarize(&mut self, block: HashedSimplexBlock, transactions: Vec<Transaction>, signatures: Vec<VoteSignature>) {
+        let iteration = block.iteration;
+        self.notarized.push(NotarizedBlock { block, signatures, transactions });
+        if self.to_be_finalized.contains(&iteration) {
+            self.finalize(iteration).await;
+            self.to_be_finalized.retain(|iter| *iter != iteration);
         }
-        false
     }
 
     pub fn is_missing(&self, length: u32, iteration: u32) -> bool {
         let last = self.last_notarized();
-        last.block.length < length || (last.block.length == length && iteration > last.block.iteration)
+        last.block.length < length || (last.block.length == length && iteration != last.block.iteration)
     }
 
-    pub async fn get_missing(&self, from_length: u32, iteration: u32) -> Vec<NotarizedBlock> {
+    pub async fn get_missing(&self, from_length: u32) -> Vec<NotarizedBlock> {
         let mut missing = Vec::new();
-        let mut curr_length = from_length + 1;
         let last = self.last_notarized();
-        for iter in iteration ..= last.block.iteration {
-            match self.notarized.iter().find(|notarized| notarized.block.iteration == iter) {
-                Some(notarized) => {
-                    missing.push(notarized.clone());
-                }
-                None => {
-                    match self.get_finalized_block(curr_length).await {
-                        Some(notarized) => {
-                            curr_length += 1;
-                            missing.push(notarized);
-                        }
-                        None => {
-                            continue
-                        }
+        for curr_length in from_length ..= last.block.length {
+            let mut blocks: Vec<NotarizedBlock> = self.notarized.iter().filter(|notarized| notarized.block.length == curr_length).cloned().collect();
+            if blocks.is_empty() {
+                match self.get_finalized_block(curr_length).await {
+                    Some(notarized) => {
+                        missing.push(notarized);
+                    }
+                    None => {
+                        break
                     }
                 }
+            } else {
+                missing.append(&mut blocks);
             }
         }
         missing
