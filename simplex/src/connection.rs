@@ -1,10 +1,9 @@
 use crate::block::NodeId;
+use crate::message::SimplexMessage;
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey, ED25519};
-use serde::de::DeserializeOwned;
-use serde::Serialize;
 use serde_json::{from_slice, to_string};
 use shared::domain::node::Node;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -15,18 +14,21 @@ const MESSAGE_BYTES_LENGTH: usize = 4;
 const MESSAGE_SIGNATURE_BYTES_LENGTH: usize = 64;
 
 
-pub async fn connect<M>(
+pub async fn connect<M: SimplexMessage>(
     my_node_id: u32,
     nodes: &Vec<Node>,
     public_keys: &HashMap<u32, Vec<u8>>,
     sender: Arc<Sender<(NodeId, M)>>,
     listener: TcpListener,
-) -> Vec<TcpStream> where M: DeserializeOwned + Send + 'static {
+) -> Vec<Option<TcpStream>>
+where
+    M: SimplexMessage + 'static
+{
     let mut connections = Vec::new();
     for node in nodes.iter() {
         let address = format!("{}:{}", node.host, node.port);
         match TcpStream::connect(address).await {
-            Ok(stream) => connections.push(stream),
+            Ok(stream) => connections.push(Some(stream)),
             Err(e) => eprintln!("[Node {}] Failed to connect to Node {}: {}", my_node_id, node.id, e),
         }
     }
@@ -64,210 +66,245 @@ async fn handle_connection<M>(
     mut socket: TcpStream,
     sender: Arc<Sender<(NodeId, M)>>,
     public_keys: HashMap<u32, Vec<u8>>,
-) where M: DeserializeOwned {
-    'init: loop {
+)
+where
+    M: SimplexMessage + Clone + 'static,
+{
+    let mut public_key: Option<UnparsedPublicKey<&Vec<u8>>> = None;
+    let mut id: Option<&u32> = None;
+
+    loop {
         let mut length_bytes = [0; MESSAGE_BYTES_LENGTH];
-        match socket.read_exact(&mut length_bytes).await {
-            Ok(_) => { }
-            Err(e) => {
-                eprintln!("Error reading length bytes: {}", e);
-                return;
-            }
-        };
+        if socket.read_exact(&mut length_bytes).await.is_err() {
+            eprintln!("Error reading length bytes");
+            return;
+        }
+
         let length = u32::from_be_bytes(length_bytes);
         let mut buffer = vec![0; length as usize];
-        match socket.read_exact(&mut buffer).await {
-            Ok(_) => { }
+        if socket.read_exact(&mut buffer).await.is_err() {
+            eprintln!("Error reading message bytes");
+            return;
+        }
+
+        let message: M = match from_slice(&buffer) {
+            Ok(msg) => msg,
             Err(e) => {
-                eprintln!("Error reading message bytes: {}", e);
+                eprintln!("Failed to deserialize message: {}", e);
                 return;
             }
         };
+
+        async fn verify_and_send<M: SimplexMessage>(
+            key: &UnparsedPublicKey<&Vec<u8>>,
+            id: &u32,
+            sender: &Sender<(NodeId, M)>,
+            message: M,
+            buffer: &[u8],
+            signature: &[u8],
+        ) -> Result<(), ()> {
+            if key.verify(buffer, signature).is_ok() {
+                let _ = sender.send((*id, message)).await;
+                Ok(())
+            } else {
+                Err(())
+            }
+        }
+
         let mut signature = vec![0; MESSAGE_SIGNATURE_BYTES_LENGTH];
-        match socket.read_exact(&mut signature).await {
-            Ok(_) => { }
-            Err(e) => {
-                eprintln!("Error reading signature bytes: {}", e);
+        let (payload, signature) = if message.is_vote() {
+            (message.get_vote_header_bytes().unwrap_or_default(), message.get_signature_bytes().unwrap_or_default())
+        } else {
+            if socket.read_exact(&mut signature).await.is_err() {
+                eprintln!("Error reading signature bytes");
                 return;
             }
+            (buffer, signature.as_ref())
         };
 
-        for (id, key) in public_keys.iter() {
-            let public_key = UnparsedPublicKey::new(&ED25519, key);
-            match public_key.verify(&buffer, &signature) {
-                Ok(_) => {
-                    match from_slice::<M>(&buffer) {
-                        Ok(message) => {
-                            match sender.send((*id, message)).await {
-                                Ok(_) => {
-                                    continue 'init;
-                                },
-                                Err(_) => {
-                                    println!("Error sending through channel");
-                                    return;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to deserialize message: {}", e);
-                            return;
-                        }
-                    }
-                },
-                Err(_) => { continue }
+        if public_key.is_none() {
+            for (i, k) in &public_keys {
+                let key = UnparsedPublicKey::new(&ED25519, k);
+                if verify_and_send(&key, i, &sender, message.clone(), &payload, signature).await.is_ok() {
+                    public_key = Some(key);
+                    id = Some(i);
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if let (Some(ref key), Some(node_id)) = (&public_key, id) {
+            let _ = verify_and_send(key, node_id, &sender, message.clone(), &payload, signature).await;
+        }
+    }
+}
+
+pub async fn broadcast<M: SimplexMessage>(
+    private_key: &Ed25519KeyPair,
+    connections: &mut Vec<Option<TcpStream>>,
+    message: M,
+) {
+    let serialized_bytes = match to_string(&message) {
+        Ok(json) => json.into_bytes(),
+        Err(e) => {
+            eprintln!("Failed to serialize message: {}", e);
+            return;
+        }
+    };
+
+    let length_bytes = (serialized_bytes.len() as u32).to_be_bytes();
+    let signature = if message.is_vote() {
+        None
+    } else {
+        Some(private_key.sign(&serialized_bytes))
+    };
+
+    let mut failed_indices = vec![];
+
+    for (i, stream) in connections.iter_mut().enumerate() {
+        match stream {
+            None => {}
+            Some(stream) => {
+                if stream.write_all(&length_bytes).await.is_err() || stream.write_all(&serialized_bytes).await.is_err() || match &signature {
+                    Some(sig) => stream.write_all(sig.as_ref()).await.is_err(),
+                    None => false,
+                } {
+                    eprintln!("Failed to send message to connection {}", i);
+                    failed_indices.push(i);
+                }
             }
         }
+    }
 
-        println!("Message signature verification failed.");
+    for i in failed_indices.into_iter().rev() {
+        connections[i] = None;
     }
 }
 
-pub async fn broadcast<M>(
+pub async fn broadcast_to_sample<M: SimplexMessage>(
     private_key: &Ed25519KeyPair,
-    connections: &mut Vec<TcpStream>,
-    message: M
-) where M: Serialize {
-    let serialized_message = match to_string(&message) {
-        Ok(json) => json,
-        Err(e) => {
-            eprintln!("Failed to serialize message: {}", e);
-            return;
-        }
-    };
-
-    let serialized_bytes = serialized_message.as_bytes();
-    let length = serialized_bytes.len() as u32;
-    let length_bytes = length.to_be_bytes();
-    let signature = private_key.sign(serialized_bytes);
-
-    for i in 0..connections.len() {
-        let stream = &mut connections[i];
-        if let Err(e) = stream.write_all(&length_bytes).await {
-            eprintln!("Failed to send message length to socket: {}", e);
-            connections.remove(i);
-            continue;
-        }
-        if let Err(e) = stream.write_all(serialized_bytes).await {
-            eprintln!("Failed to send message to socket: {}", e);
-            connections.remove(i);
-            continue;
-        }
-        if let Err(e) = stream.write_all(signature.as_ref()).await {
-            eprintln!("Failed to send signature to socket: {}", e);
-            connections.remove(i);
-            continue;
-        }
-    }
-}
-
-pub async fn broadcast_to_sample<M>(
-    private_key: &Ed25519KeyPair,
-    connections: &mut Vec<TcpStream>,
+    connections: &mut Vec<Option<TcpStream>>,
     message: M,
-    sample_set: HashSet<u32>,
-) where M: Serialize {
-    let serialized_message = match to_string(&message) {
-        Ok(json) => json,
+    sample_set: Vec<u32>,
+) {
+    let serialized_bytes = match to_string(&message) {
+        Ok(json) => json.into_bytes(),
         Err(e) => {
             eprintln!("Failed to serialize message: {}", e);
             return;
         }
     };
 
-    let serialized_bytes = serialized_message.as_bytes();
-    let length = serialized_bytes.len() as u32;
-    let length_bytes = length.to_be_bytes();
-    let signature = private_key.sign(serialized_bytes);
+    let length_bytes = (serialized_bytes.len() as u32).to_be_bytes();
+    let signature = if message.is_vote() {
+        None
+    } else {
+        Some(private_key.sign(&serialized_bytes))
+    };
+
+    let mut failed_indices = vec![];
 
     for i in sample_set {
         let stream = &mut connections[i as usize];
-        if let Err(e) = stream.write_all(&length_bytes).await {
-            eprintln!("Failed to send message length to socket: {}", e);
-            connections.remove(i as usize);
-            continue;
+        match stream {
+            None => {}
+            Some(stream) => {
+                if stream.write_all(&length_bytes).await.is_err() || stream.write_all(&serialized_bytes).await.is_err() || match &signature {
+                    Some(sig) => stream.write_all(sig.as_ref()).await.is_err(),
+                    None => false,
+                } {
+                    eprintln!("Failed to send message to connection {}", i);
+                    failed_indices.push(i);
+                }
+            }
         }
-        if let Err(e) = stream.write_all(serialized_bytes).await {
-            eprintln!("Failed to send message to socket: {}", e);
-            connections.remove(i as usize);
-            continue;
-        }
-        if let Err(e) = stream.write_all(signature.as_ref()).await {
-            eprintln!("Failed to send signature to socket: {}", e);
-            connections.remove(i as usize);
-            continue;
-        }
+    }
+
+    for i in failed_indices.into_iter().rev() {
+        connections[i as usize] = None;
     }
 }
 
-pub async fn notify<M>(
+pub async fn notify<M: SimplexMessage>(
     private_key: &Ed25519KeyPair,
-    connections: &mut Vec<TcpStream>,
+    connections: &mut Vec<Option<TcpStream>>,
     message: M,
     my_node_id: u32,
-) where M: Serialize {
-    let serialized_message = match to_string(&message) {
-        Ok(json) => json,
+) {
+    let serialized_bytes = match to_string(&message) {
+        Ok(json) => json.into_bytes(),
         Err(e) => {
             eprintln!("Failed to serialize message: {}", e);
             return;
         }
     };
 
-    let serialized_bytes = serialized_message.as_bytes();
-    let length = serialized_bytes.len() as u32;
-    let length_bytes = length.to_be_bytes();
-    let signature = private_key.sign(serialized_bytes);
+    let length_bytes = (serialized_bytes.len() as u32).to_be_bytes();
+    let signature = if message.is_vote() {
+        None
+    } else {
+        Some(private_key.sign(&serialized_bytes))
+    };
 
-    for i in 0..connections.len() {
-        let stream = &mut connections[i];
-        if i != my_node_id as usize {
-            if let Err(e) = stream.write_all(&length_bytes).await {
-                eprintln!("Failed to send message length to socket: {}", e);
-                connections.remove(i);
-                continue;
-            }
-            if let Err(e) = stream.write_all(serialized_bytes).await {
-                eprintln!("Failed to send message to socket: {}", e);
-                connections.remove(i);
-                continue;
-            }
-            if let Err(e) = stream.write_all(signature.as_ref()).await {
-                eprintln!("Failed to send signature to socket: {}", e);
-                connections.remove(i);
-                continue;
+
+    let mut failed_indices = vec![];
+
+    for (i, stream) in connections.iter_mut().enumerate() {
+        if i == my_node_id as usize {
+            continue
+        }
+        match stream {
+            None => {}
+            Some(stream) => {
+                if stream.write_all(&length_bytes).await.is_err() || stream.write_all(&serialized_bytes).await.is_err() || match &signature {
+                    Some(sig) => stream.write_all(sig.as_ref()).await.is_err(),
+                    None => false,
+                } {
+                    eprintln!("Failed to send message to connection {}", i);
+                    failed_indices.push(i);
+                }
             }
         }
+    }
+
+    for i in failed_indices.into_iter().rev() {
+        connections[i] = None;
     }
 }
 
-pub async fn unicast<M>(
+pub async fn unicast<M: SimplexMessage>(
     private_key: &Ed25519KeyPair,
-    connection: &mut TcpStream,
-    message: M
-) where M: Serialize {
-    let serialized_message = match to_string(&message) {
-        Ok(json) => json,
+    connections: &mut Vec<Option<TcpStream>>,
+    message: M,
+    recipient: u32,
+) {
+    let serialized_bytes = match to_string(&message) {
+        Ok(json) => json.into_bytes(),
         Err(e) => {
             eprintln!("Failed to serialize message: {}", e);
             return;
         }
     };
 
-    let serialized_bytes = serialized_message.as_bytes();
-    let length = serialized_bytes.len() as u32;
-    let length_bytes = length.to_be_bytes();
-    let signature = private_key.sign(serialized_bytes);
+    let length_bytes = (serialized_bytes.len() as u32).to_be_bytes();
+    let signature = if message.is_vote() {
+        None
+    } else {
+        Some(private_key.sign(&serialized_bytes))
+    };
 
-    if let Err(e) = connection.write_all(&length_bytes).await {
-        eprintln!("Failed to send message length to socket: {}", e);
-        return;
-    }
-    if let Err(e) = connection.write_all(serialized_bytes).await {
-        eprintln!("Failed to send message to socket: {}", e);
-        return;
-    }
-    if let Err(e) = connection.write_all(signature.as_ref()).await {
-        eprintln!("Failed to send signature to socket: {}", e);
-        return;
+    let stream = &mut connections[recipient as usize];
+    match stream {
+        None => {}
+        Some(connection) => {
+            if connection.write_all(&length_bytes).await.is_err() || connection.write_all(&serialized_bytes).await.is_err() || match &signature {
+                Some(sig) => connection.write_all(sig.as_ref()).await.is_err(),
+                None => false,
+            } {
+                eprintln!("Failed to send message to connection");
+                connections[recipient as usize] = None
+            }
+        }
     }
 }
