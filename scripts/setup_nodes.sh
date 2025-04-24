@@ -6,13 +6,34 @@
 
 set -e
 
+# Number of nodes, default to 4
 NUM_NODES=${1:-4}
+
+# Directory for shared files
 SHARED_DIR="shared"
 KEYS_FILE="public_keys.toml"
 
+# Path to the keygen-pkcs8 binary
+KEYGEN_BIN="./target/release/keygen-pkcs8"
+
+# Function to check if cargo is installed
+check_cargo() {
+  if ! command -v cargo &> /dev/null
+  then
+    echo "Cargo is not installed. Installing..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    source $HOME/.cargo/env
+  fi
+}
+
+# Ensure cargo is installed
+check_cargo
+
+# Navigate to the shared directory or exit if not found
 cd "$SHARED_DIR" || { echo "Shared directory not found."; exit 1; }
 
-# Step 0: Clear previous key and env files
+# Step 0: Clear previous files
+echo "🧹 Removing old files..."
 echo "" > "$KEYS_FILE"
 echo "" > set_keys.env
 
@@ -24,31 +45,28 @@ for ((i=0; i<NUM_NODES; i++)); do
   echo "$i,127.0.0.1,$PORT" >> nodes.csv
 done
 
-# Step 2: Generate Ed25519 PKCS#8 v1 keys (compatible with from_pkcs8_maybe_unchecked)
-echo "🔐 Generating Ed25519 key pairs..."
+# Step 2: Build keygen-pkcs8 if not already built
+if [ ! -f "$KEYGEN_BIN" ]; then
+  echo "🔨 Building keygen-pkcs8..."
+  cargo build --release -p keygen-pkcs8
+fi
 
+# Step 3: Generate PKCS#8 v2 Ed25519 keypairs
+echo "🔐 Generating Ed25519 PKCS#8 key pairs..."
 for ((i=0; i<NUM_NODES; i++)); do
-  TMP_DIR=$(mktemp -d)
+  OUTPUT=$($KEYGEN_BIN)
+  PRIVATE_BASE64=$(echo "$OUTPUT" | cut -d ':' -f1)
+  PUBLIC_BASE64=$(echo "$OUTPUT" | cut -d ':' -f2)
 
-  # Private key in PEM format
-  openssl genpkey -algorithm ED25519 -out "$TMP_DIR/private.pem"
-
-  # Private key as DER (binary), which is what ring expects
-  openssl pkcs8 -topk8 -inform PEM -outform DER -nocrypt -in "$TMP_DIR/private.pem" -out "$TMP_DIR/private.der"
-
-  # Export public key (DER, then base64)
-  PUB_BASE64=$(openssl pkey -in "$TMP_DIR/private.pem" -pubout -outform DER | base64 -w 0)
-  PRIV_BASE64=$(base64 -w 0 "$TMP_DIR/private.der")
-
-  rm -rf "$TMP_DIR"
-
+  # Write public key to the TOML file
   echo "[$i]" >> "$KEYS_FILE"
-  echo "public_key = \"$PUB_BASE64\"" >> "$KEYS_FILE"
+  echo "public_key = \"$PUBLIC_BASE64\"" >> "$KEYS_FILE"
   echo "" >> "$KEYS_FILE"
 
-  export "PRIVATE_KEY_$i=$PRIV_BASE64"
-  echo "export PRIVATE_KEY_$i=\"$PRIV_BASE64\"" >> set_keys.env
+  # Store private key in environment file
+  export "PRIVATE_KEY_$i=$PRIVATE_BASE64"
+  echo "export PRIVATE_KEY_$i=\"$PRIVATE_BASE64\"" >> set_keys.env
 done
 
-echo "✅ Finished: public_keys.toml and env variables for private keys."
-echo "ℹ️ Load private keys into your shell with: source shared/set_keys.env"
+echo "✅ Done. Public keys in $KEYS_FILE. Run:"
+echo "   source $SHARED_DIR/set_keys.env"

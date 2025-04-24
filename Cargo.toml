@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = ["shared", "streamlet", "simplex"]
+members = ["shared", "streamlet", "simplex", "keygen-pkcs8"]
 
 [lib]
 name = "shared"
@@ -17,6 +17,10 @@ path = "streamlet/src/main.rs"
 [[bin]]
 name = "simplex"
 path = "simplex/src/main.rs"
+
+[[bin]]
+name = "keygen-pkcs8"
+path = "keygen-pkcs8/src/main.rs"
 
 [dependencies]
 chrono = "0.4.38"
