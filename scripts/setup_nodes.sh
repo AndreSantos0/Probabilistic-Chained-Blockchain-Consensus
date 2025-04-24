@@ -8,7 +8,7 @@ set -e
 
 NUM_NODES=${1:-4}
 SHARED_DIR="shared"
-KEYS_FILE="$SHARED_DIR/public_keys.toml"
+KEYS_FILE="public_keys.toml"
 
 cd "$SHARED_DIR" || { echo "Shared directory not found."; exit 1; }
 
