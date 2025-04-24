@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# ./measure_throughput.sh 3 prob
+# chmod +x scripts/measure_throughput.sh
+# ./scripts/measure_throughput.sh 3 prob
 
 # Exit on error
 set -e

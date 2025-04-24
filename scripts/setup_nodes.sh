@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# chmod +x setup_nodes.sh
-# ./setup_nodes.sh 5
-# source setup_nodes.sh
+# chmod +x scripts/setup_nodes.sh
+# ./scripts/setup_nodes.sh 10
+# source scripts/set_keys.env
 
 set -e
 
@@ -23,26 +23,35 @@ for ((i=0; i<NUM_NODES; i++)); do
   echo "$i,127.0.0.1,$PORT" >> nodes.csv
 done
 
-# Step 2: Generate Ed25519 keypairs and export
-echo "🔐 Generating Ed25519 key pairs in memory..."
-echo -n "" > set_keys.env
+# Step 2: Generate Ed25519 keypairs in PKCS#8 DER format and export
+echo "🔐 Generating Ed25519 key pairs in PKCS#8 format..."
+echo -n "" > ../set_keys.env
 
 for ((i=0; i<NUM_NODES; i++)); do
   TMP_DIR=$(mktemp -d)
-  ssh-keygen -t ed25519 -f "$TMP_DIR/key" -N "" -q
 
-  PUB_BASE64=$(cut -d' ' -f2 < "$TMP_DIR/key.pub")
-  PRIV_BASE64=$(base64 -w 0 "$TMP_DIR/key")
+  # Generate private key in PKCS#8 DER format
+  openssl genpkey -algorithm Ed25519 -outform DER -out "$TMP_DIR/private.der"
 
+  # Extract the public key in PEM format and convert to raw base64
+  openssl pkey -in "$TMP_DIR/private.der" -inform DER -pubout -outform DER > "$TMP_DIR/public.der"
+  PUB_BASE64=$(base64 -w 0 "$TMP_DIR/public.der")
+
+  # Base64 encode the private key
+  PRIV_BASE64=$(base64 -w 0 "$TMP_DIR/private.der")
+
+  # Clean up
   rm -rf "$TMP_DIR"
 
+  # Append to TOML
   echo "[$i]" >> "$KEYS_FILE"
   echo "public_key = \"$PUB_BASE64\"" >> "$KEYS_FILE"
   echo "" >> "$KEYS_FILE"
 
+  # Export private key as env variable
   export "PRIVATE_KEY_$i=$PRIV_BASE64"
-  echo "export PRIVATE_KEY_$i=\"$PRIV_BASE64\"" >> set_keys.env
+  echo "export PRIVATE_KEY_$i=\"$PRIV_BASE64\"" >> ../set_keys.env
 done
 
-echo "✅ Finished: nodes.csv and fresh public_keys.toml generated."
+echo "✅ Finished: nodes.csv and PKCS#8 public_keys.toml generated."
 echo "ℹ️ To load private keys into your session, run: source set_keys.env"

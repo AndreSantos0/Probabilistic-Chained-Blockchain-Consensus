@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# chmod +x run_all_nodes.sh
-# ./run_all_nodes.sh prob
+# chmod +x scripts/run_all_nodes.sh
+# ./scripts/run_all_nodes.sh prob
 
 # Exit on error
 set -e
