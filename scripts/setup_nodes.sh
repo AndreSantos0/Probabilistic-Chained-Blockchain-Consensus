@@ -12,9 +12,11 @@ KEYS_FILE="public_keys.toml"
 
 cd "$SHARED_DIR" || { echo "Shared directory not found."; exit 1; }
 
+# Step 0: Clear previous key and env files
 echo "" > "$KEYS_FILE"
-echo -n "" > set_keys.env
+echo "" > set_keys.env
 
+# Step 1: Generate nodes.csv
 echo "📄 Generating nodes.csv for $NUM_NODES nodes..."
 echo "id,host,port" > nodes.csv
 for ((i=0; i<NUM_NODES; i++)); do
@@ -22,18 +24,21 @@ for ((i=0; i<NUM_NODES; i++)); do
   echo "$i,127.0.0.1,$PORT" >> nodes.csv
 done
 
-echo "🔐 Generating PKCS#8 Ed25519 key pairs..."
+# Step 2: Generate Ed25519 PKCS#8 v1 keys (compatible with from_pkcs8_maybe_unchecked)
+echo "🔐 Generating Ed25519 key pairs..."
+
 for ((i=0; i<NUM_NODES; i++)); do
   TMP_DIR=$(mktemp -d)
 
-  # Generate private key in PKCS#8 DER format
-  openssl genpkey -algorithm Ed25519 -out "$TMP_DIR/private_key.pem"
-  openssl pkcs8 -topk8 -nocrypt -in "$TMP_DIR/private_key.pem" -outform DER -out "$TMP_DIR/private_key.der"
+  # Private key in PEM format
+  openssl genpkey -algorithm ED25519 -out "$TMP_DIR/private.pem"
 
-  # Extract public key (base64)
-  openssl pkey -in "$TMP_DIR/private_key.pem" -pubout -outform DER > "$TMP_DIR/public_key.der"
-  PUB_BASE64=$(base64 -w 0 "$TMP_DIR/public_key.der")
-  PRIV_BASE64=$(base64 -w 0 "$TMP_DIR/private_key.der")
+  # Private key as DER (binary), which is what ring expects
+  openssl pkcs8 -topk8 -inform PEM -outform DER -nocrypt -in "$TMP_DIR/private.pem" -out "$TMP_DIR/private.der"
+
+  # Export public key (DER, then base64)
+  PUB_BASE64=$(openssl pkey -in "$TMP_DIR/private.pem" -pubout -outform DER | base64 -w 0)
+  PRIV_BASE64=$(base64 -w 0 "$TMP_DIR/private.der")
 
   rm -rf "$TMP_DIR"
 
@@ -45,5 +50,5 @@ for ((i=0; i<NUM_NODES; i++)); do
   echo "export PRIVATE_KEY_$i=\"$PRIV_BASE64\"" >> set_keys.env
 done
 
-echo "✅ Keys and nodes.csv created successfully."
-echo "ℹ️ Run: source set_keys.env to load private keys into your environment."
+echo "✅ Finished: public_keys.toml and env variables for private keys."
+echo "ℹ️ Load private keys into your shell with: source shared/set_keys.env"
