@@ -2,11 +2,8 @@ use crate::domain::transaction::{Amount, Transaction};
 
 
 const INITIAL_NONCE: u32 = 1;
-const MAX_LIST_SIZE: usize = 5;
-const MIN_LIST_SIZE: usize = 1;
 const DEFAULT_AMOUNT_INTEGRAL: u64 = 50;
 const DEFAULT_AMOUNT_FRACTIONAL: u64 = 0;
-const LARGE_PRIME: u32 = 1_000_003;
 const NUMBER_OF_TRANSACTIONS: usize = 10;
 
 pub struct TransactionGenerator {
