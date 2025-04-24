@@ -108,7 +108,7 @@ pub trait Protocol {
             if leader == my_node_id {
                 let transactions = self.get_transaction_generator().generate(my_node_id);
                 let block = self.get_blockchain().get_next_block(iteration, transactions);
-                println!("Proposed {}", block.length);
+                //println!("Proposed {}", block.length);
                 let message = Self::create_proposal(block);
                 self.send(connections, message, None).await;
             }
@@ -120,7 +120,7 @@ pub trait Protocol {
                     let vote = self.create_vote(iteration, block);
                     let sample = vote.get_sample();
                     self.send(connections, vote, sample).await;
-                    println!("Voted for {}", proposed_block.length);
+                    //println!("Voted for {}", proposed_block.length);
                 }
             }
 

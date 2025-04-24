@@ -146,7 +146,7 @@ impl Protocol for PracticalSimplex {
 impl PracticalSimplex {
 
     async fn handle_propose(&mut self, propose: Propose, sender: u32, connections: &mut Vec<Option<TcpStream>>) {
-        println!("Received propose {}", propose.content.length);
+        //println!("Received propose {}", propose.content.length);
         let leader = Self::get_leader(self.environment.nodes.len(), propose.content.iteration);
         if !self.proposes.contains_key(&propose.content.iteration) && sender == leader {
             self.proposes.insert(propose.content.iteration, propose.clone());
@@ -155,7 +155,7 @@ impl PracticalSimplex {
                 let block = HashedSimplexBlock::from(&propose.content);
                 let vote = self.create_vote(iteration, block);
                 self.send(connections, vote, None).await;
-                println!("Voted for {}", propose.content.length);
+                //println!("Voted for {}", propose.content.length);
             }
         }
     }
@@ -167,12 +167,12 @@ impl PracticalSimplex {
         reset_tx: Sender<()>,
         connections: &mut Vec<Option<TcpStream>>,
     ) {
-        println!("Received vote {}", vote.iteration);
+        //println!("Received vote {}", vote.iteration);
         let vote_signatures = self.votes.entry(vote.header).or_insert_with(Vec::new);
         let is_first_vote = !vote_signatures.iter().any(|vote_signature| vote_signature.node == sender);
         if is_first_vote {
             vote_signatures.push(VoteSignature { signature: vote.signature, node: sender });
-            println!("{} signatures", vote_signatures.len());
+            //println!("{} signatures", vote_signatures.len());
             let iteration = self.iteration.load(Ordering::SeqCst);
             if vote_signatures.len() == self.quorum_size {
                 match self.proposes.get(&vote.iteration) {
@@ -209,12 +209,12 @@ impl PracticalSimplex {
     }
 
     async fn handle_timeout(&mut self, timeout: Timeout, sender: u32, reset_tx: Sender<()>, connections: &mut Vec<Option<TcpStream>>) {
-        println!("Received timeout {}", timeout.next_iter);
+        //println!("Received timeout {}", timeout.next_iter);
         let timeouts = self.timeouts.entry(timeout.next_iter).or_insert_with(Vec::new);
         let is_first_timeout = !timeouts.iter().any(|node_id| *node_id == sender);
         if is_first_timeout {
             timeouts.push(sender);
-            println!("{} matching timeouts for iter {}", timeouts.len(), timeout.next_iter);
+            //println!("{} matching timeouts for iter {}", timeouts.len(), timeout.next_iter);
             if timeouts.len() == self.quorum_size && timeout.next_iter == self.iteration.load(Ordering::SeqCst) + 1 {
                 self.iteration.store(timeout.next_iter, Ordering::SeqCst);
                 self.handle_iteration_advance(connections).await;
@@ -224,7 +224,7 @@ impl PracticalSimplex {
     }
 
     async fn handle_finalize(&mut self, finalize: Finalize, sender: u32, connections: &mut Vec<Option<TcpStream>>) {
-        println!("Received finalize {}", finalize.iter);
+        //println!("Received finalize {}", finalize.iter);
         let finalizes = self.finalizes.entry(finalize.iter).or_insert_with(Vec::new);
         let is_first_finalize = !finalizes.iter().any(|node_id| *node_id == sender);
         if is_first_finalize {
@@ -253,7 +253,7 @@ impl PracticalSimplex {
         connections: &mut Vec<Option<TcpStream>>,
         sender: u32,
     ) {
-        println!("Received view {}", view.last_notarized.block.length);
+        //println!("Received view {}", view.last_notarized.block.length);
         if self.blockchain.is_missing(view.last_notarized.block.length, view.last_notarized.block.iteration) && view.last_notarized.signatures.len() >= self.quorum_size {
             for vote_signature in view.last_notarized.signatures.iter() {
                 match self.public_keys.get(&vote_signature.node) {
@@ -271,7 +271,7 @@ impl PracticalSimplex {
                         match public_key.verify(bytes, vote_signature.signature.as_ref()) {
                             Ok(_) => { }
                             Err(_) => {
-                                println!("View signature verification failed");
+                                eprintln!("View signature verification failed");
                                 return
                             }
                         }
@@ -283,14 +283,14 @@ impl PracticalSimplex {
     }
 
     async fn handle_request(&mut self, request: Request, connections: &mut Vec<Option<TcpStream>>, sender: u32) {
-        println!("Request received");
+        //println!("Request received");
         let missing = self.blockchain.get_missing(request.last_notarized_length).await;
         if missing.is_empty() {
             return
         }
         if let Some(sender_node) = self.environment.nodes.iter().find(|node| node.id == sender) {
             unicast(&self.private_key, connections, PracticalSimplexMessage::Reply(Reply { blocks: missing }), sender_node.id).await;
-            println!("Reply send");
+            //println!("Reply send");
         }
     }
 
@@ -300,7 +300,7 @@ impl PracticalSimplex {
         reset_tx: Sender<()>,
         connections: &mut Vec<Option<TcpStream>>,
     ) {
-        println!("Received Reply {:?}", reply.blocks);
+        //println!("Received Reply {:?}", reply.blocks);
         if reply.blocks.is_empty() {
             return;
         }
@@ -331,7 +331,7 @@ impl PracticalSimplex {
                             match public_key.verify(bytes, vote_signature.signature.as_ref()) {
                                 Ok(_) => { }
                                 Err(_) => {
-                                    println!("Reply Signature verification failed");
+                                    eprintln!("Reply Signature verification failed");
                                     break;
                                 }
                             }
@@ -365,7 +365,7 @@ impl PracticalSimplex {
     async fn request(&self, sender: u32, connections: &mut Vec<Option<TcpStream>>) {
         if let Some(sender_node) = self.environment.nodes.iter().find(|node| node.id == sender) {
             unicast(&self.private_key, connections, PracticalSimplexMessage::Request(Request { last_notarized_length: self.blockchain.last_notarized().block.length }), sender_node.id).await;
-            println!("Request send");
+            //println!("Request send");
         }
     }
 }

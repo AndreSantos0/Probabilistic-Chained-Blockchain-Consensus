@@ -9,6 +9,27 @@ set -e
 # Optional mode argument (e.g., "prob")
 MODE="$1"
 
+# Check if Cargo (Rust's package manager) is installed
+if ! command -v cargo &> /dev/null; then
+  echo "Cargo not found. Installing Rust (which includes Cargo)..."
+
+  # Install rustup (Rust installer), which installs Cargo as well
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+  # Source the rust environment to update the current shell session
+  source "$HOME/.cargo/env"
+
+  # Confirm that cargo was installed successfully
+  if ! command -v cargo &> /dev/null; then
+    echo "Cargo installation failed. Exiting."
+    exit 1
+  fi
+
+  echo "Cargo successfully installed."
+else
+  echo "Cargo is already installed."
+fi
+
 # Check that we're in the repo root
 if [ ! -f "Cargo.toml" ]; then
   echo "Please run this script from the root of the cloned repository."
