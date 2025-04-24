@@ -14,7 +14,7 @@ SHARED_DIR="shared"
 KEYS_FILE="public_keys.toml"
 
 # Path to the keygen-pkcs8 binary
-KEYGEN_BIN="./target/release/keygen-pkcs8"
+KEYGEN_BIN="../target/release/keygen-pkcs8"
 
 # Function to check if cargo is installed
 check_cargo() {
