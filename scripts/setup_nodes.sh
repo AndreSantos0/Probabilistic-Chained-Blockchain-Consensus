@@ -7,8 +7,7 @@
 set -e
 
 NUM_NODES=${1:-4}
-REPO_DIR="Probabilistic-Chained-Blockchain-Consensus"
-SHARED_DIR="$REPO_DIR/shared"
+SHARED_DIR="shared"
 KEYS_FILE="$SHARED_DIR/public_keys.toml"
 
 cd "$SHARED_DIR" || { echo "Shared directory not found."; exit 1; }
