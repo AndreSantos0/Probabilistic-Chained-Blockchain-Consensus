@@ -215,9 +215,6 @@ impl PracticalSimplex {
         if is_first_timeout {
             timeouts.push(sender);
             println!("{} matching timeouts for iter {}", timeouts.len(), timeout.next_iter);
-            //if let Some(notarized) = self.blockchain.get_block(timeout.next_iter - 1) {
-            //    unicast(&self.private_key, connections, PracticalSimplexMessage::Reply(Reply { blocks: vec![notarized.clone()] }), sender).await;
-            //}
             if timeouts.len() == self.quorum_size && timeout.next_iter == self.iteration.load(Ordering::SeqCst) + 1 {
                 self.iteration.store(timeout.next_iter, Ordering::SeqCst);
                 self.handle_iteration_advance(connections).await;
