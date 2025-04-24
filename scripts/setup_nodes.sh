@@ -11,7 +11,6 @@ REPO_DIR="Probabilistic-Chained-Blockchain-Consensus"
 SHARED_DIR="$REPO_DIR/shared"
 KEYS_FILE="$SHARED_DIR/public_keys.toml"
 
-mkdir -p "$SHARED_DIR"
 cd "$SHARED_DIR" || { echo "Shared directory not found."; exit 1; }
 
 # Step 1: Generate nodes.csv
