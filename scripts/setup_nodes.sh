@@ -13,11 +13,7 @@ KEYS_FILE="$SHARED_DIR/public_keys.toml"
 cd "$SHARED_DIR" || { echo "Shared directory not found."; exit 1; }
 
 # Step 0: Clear previous public keys file
-if [ -f "$KEYS_FILE" ]; then
-  echo "🧹 Removing existing $KEYS_FILE..."
-  rm "$KEYS_FILE"
-fi
-touch "$KEYS_FILE"
+echo "" > "$KEYS_FILE"
 
 # Step 1: Generate nodes.csv
 echo "📄 Generating nodes.csv for $NUM_NODES nodes..."
