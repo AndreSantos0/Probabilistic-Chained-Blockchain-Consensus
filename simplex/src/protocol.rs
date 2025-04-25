@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::time::{interval, Duration};
+use tokio::time::{interval, sleep, Duration};
 
 pub enum ProtocolMode {
     Practical,
@@ -50,6 +50,7 @@ pub trait Protocol {
                 let (timeout_tx, timeout_rx) = mpsc::channel::<u32>(Self::TIMEOUT_CHANNEL_SIZE);
                 let (reset_tx,reset_rx) = mpsc::channel::<()>(Self::RESET_TIMER_CHANNEL_SIZE);
                 let sender = Arc::new(tx);
+                sleep(Duration::from_secs(5)).await;
                 let mut connections = connect(self.get_environment().my_node.id, &self.get_environment().nodes, self.get_public_keys(), sender, listener).await;
                 self.start_iteration_timer(timeout_tx, reset_rx).await;
                 self.execute_protocol(rx, timeout_rx, reset_tx, &mut connections).await;

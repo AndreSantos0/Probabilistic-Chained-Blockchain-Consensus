@@ -34,7 +34,7 @@ async fn main() {
                 minute -= MINUTES_PER_HOUR;
             }
             println!("Starting at {}:{}", next_hour, minute);
-            wait_until_specific_time(next_hour, minute).await;
+            //wait_until_specific_time(next_hour, minute).await;
             match protocol_mode {
                 ProtocolMode::Practical => PracticalSimplex::new(env, public_keys, private_key).start().await,
                 ProtocolMode::Probabilistic => ProbabilisticSimplex::new(env, public_keys, private_key).start().await,
