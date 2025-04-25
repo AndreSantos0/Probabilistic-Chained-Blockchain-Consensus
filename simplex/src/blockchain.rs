@@ -99,7 +99,7 @@ impl Blockchain {
         let last = self.last_notarized();
         for curr_length in from_length ..= last.block.length {
             let mut blocks: Vec<NotarizedBlock> = self.notarized.iter().filter(|notarized| notarized.block.length == curr_length).cloned().collect();
-            if blocks.is_empty() {
+            if blocks.is_empty() && curr_length != GENESIS_LENGTH {
                 match self.get_finalized_block(curr_length).await {
                     Some(notarized) => {
                         missing.push(notarized);
