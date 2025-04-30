@@ -58,7 +58,7 @@ pub fn vrf_verify(
     possible_ids.shuffle(&mut rng);
 
     let mut expected_sample_set: HashSet<u32> = possible_ids.into_iter().take(sample_size - 1).collect();
-    expected_sample_set.insert(leader_id); // Always include leader_id
+    expected_sample_set.insert(leader_id);
 
     sample_set == expected_sample_set
 }

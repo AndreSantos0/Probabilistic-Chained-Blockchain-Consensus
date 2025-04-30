@@ -21,7 +21,7 @@ const EPOCH_TIME: u64 = 3;
 const CONFUSION_START: u32 = 0;
 const CONFUSION_DURATION: u32 = 0;
 const MESSAGE_CHANNEL_SIZE: usize = 50;
-
+const TRANSACTION_SIZE: usize = 256;
 
 pub struct StreamletNode {
     environment: Environment,
@@ -153,7 +153,7 @@ impl StreamletNode {
 
     async fn propose(&mut self, connections: &mut Vec<TcpStream>) {
         let epoch = self.epoch.load(Ordering::SeqCst);
-        let transactions = self.transaction_generator.generate(self.environment.my_node.id);
+        let transactions = self.transaction_generator.generate(self.environment.my_node.id, TRANSACTION_SIZE);
         let block = self.blockchain.get_next_block(epoch, transactions);
         let message = StreamletMessage::Propose(Propose { content: block });
         broadcast(&self.private_key, connections, message).await;

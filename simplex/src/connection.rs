@@ -12,6 +12,7 @@ use tokio::sync::mpsc::Sender;
 
 const MESSAGE_BYTES_LENGTH: usize = 4;
 const MESSAGE_SIGNATURE_BYTES_LENGTH: usize = 64;
+const DEFAULT_SENDER: u32 = 0;
 
 
 pub async fn connect<M: SimplexMessage>(
@@ -20,6 +21,7 @@ pub async fn connect<M: SimplexMessage>(
     public_keys: &HashMap<u32, Vec<u8>>,
     sender: Arc<Sender<(NodeId, M)>>,
     listener: TcpListener,
+    enable_crypto: bool,
 ) -> Vec<Option<TcpStream>>
 where
     M: SimplexMessage + 'static
@@ -28,7 +30,9 @@ where
     for node in nodes.iter() {
         let address = format!("{}:{}", node.host, node.port);
         match TcpStream::connect(address).await {
-            Ok(stream) => connections.push(Some(stream)),
+            Ok(stream) => {
+                connections.push(Some(stream));
+            }
             Err(e) => eprintln!("[Node {}] Failed to connect to Node {}: {}", my_node_id, node.id, e),
         }
     }
@@ -46,7 +50,7 @@ where
                     let sender = Arc::clone(&sender);
                     let keys = public_keys.clone();
                     tokio::spawn(async move {
-                        handle_connection(stream, sender, keys).await
+                        handle_connection(stream, sender, keys, enable_crypto).await
                     });
                 }
             },
@@ -58,14 +62,15 @@ where
     connections
 }
 
-fn is_allowed(addr: SocketAddr) -> bool {
-    addr.ip().is_loopback() //TODO: Discuss this
+fn is_allowed(_addr: SocketAddr) -> bool {
+    true
 }
 
 async fn handle_connection<M>(
     mut socket: TcpStream,
     sender: Arc<Sender<(NodeId, M)>>,
     public_keys: HashMap<u32, Vec<u8>>,
+    enable_crypto: bool,
 )
 where
     M: SimplexMessage + Clone + 'static,
@@ -111,31 +116,35 @@ where
             }
         }
 
-        let mut signature = vec![0; MESSAGE_SIGNATURE_BYTES_LENGTH];
-        let (payload, signature) = if message.is_vote() {
-            (message.get_vote_header_bytes().unwrap_or_default(), message.get_signature_bytes().unwrap_or_default())
-        } else {
-            if socket.read_exact(&mut signature).await.is_err() {
-                eprintln!("Error reading signature bytes");
-                return;
-            }
-            (buffer, signature.as_ref())
-        };
-
-        if public_key.is_none() {
-            for (i, k) in &public_keys {
-                let key = UnparsedPublicKey::new(&ED25519, k);
-                if verify_and_send(&key, i, &sender, message.clone(), &payload, signature).await.is_ok() {
-                    public_key = Some(key);
-                    id = Some(i);
-                    break;
+        if enable_crypto {
+            let mut signature = vec![0; MESSAGE_SIGNATURE_BYTES_LENGTH];
+            let (payload, signature) = if message.is_vote() {
+                (message.get_vote_header_bytes().unwrap_or_default(), message.get_signature_bytes().unwrap_or_default())
+            } else {
+                if socket.read_exact(&mut signature).await.is_err() {
+                    eprintln!("Error reading signature bytes");
+                    return;
                 }
-            }
-            continue;
-        }
+                (buffer, signature.as_ref())
+            };
 
-        if let (Some(ref key), Some(node_id)) = (&public_key, id) {
-            let _ = verify_and_send(key, node_id, &sender, message.clone(), &payload, signature).await;
+            if public_key.is_none() {
+                for (i, k) in &public_keys {
+                    let key = UnparsedPublicKey::new(&ED25519, k);
+                    if verify_and_send(&key, i, &sender, message.clone(), &payload, signature).await.is_ok() {
+                        public_key = Some(key);
+                        id = Some(i);
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            if let (Some(ref key), Some(node_id)) = (&public_key, id) {
+                let _ = verify_and_send(key, node_id, &sender, message.clone(), &payload, signature).await;
+            }
+        } else {
+            let _ = sender.send((DEFAULT_SENDER, message)).await;
         }
     }
 }
@@ -144,6 +153,7 @@ pub async fn broadcast<M: SimplexMessage>(
     private_key: &Ed25519KeyPair,
     connections: &mut Vec<Option<TcpStream>>,
     message: M,
+    enable_crypto: bool,
 ) {
     let serialized_bytes = match to_string(&message) {
         Ok(json) => json.into_bytes(),
@@ -154,7 +164,7 @@ pub async fn broadcast<M: SimplexMessage>(
     };
 
     let length_bytes = (serialized_bytes.len() as u32).to_be_bytes();
-    let signature = if message.is_vote() {
+    let signature = if message.is_vote() || !enable_crypto {
         None
     } else {
         Some(private_key.sign(&serialized_bytes))
@@ -187,6 +197,7 @@ pub async fn broadcast_to_sample<M: SimplexMessage>(
     connections: &mut Vec<Option<TcpStream>>,
     message: M,
     sample_set: Vec<u32>,
+    enable_crypto: bool,
 ) {
     let serialized_bytes = match to_string(&message) {
         Ok(json) => json.into_bytes(),
@@ -197,7 +208,7 @@ pub async fn broadcast_to_sample<M: SimplexMessage>(
     };
 
     let length_bytes = (serialized_bytes.len() as u32).to_be_bytes();
-    let signature = if message.is_vote() {
+    let signature = if message.is_vote() || !enable_crypto {
         None
     } else {
         Some(private_key.sign(&serialized_bytes))
@@ -231,6 +242,7 @@ pub async fn notify<M: SimplexMessage>(
     connections: &mut Vec<Option<TcpStream>>,
     message: M,
     my_node_id: u32,
+    enable_crypto: bool,
 ) {
     let serialized_bytes = match to_string(&message) {
         Ok(json) => json.into_bytes(),
@@ -241,12 +253,11 @@ pub async fn notify<M: SimplexMessage>(
     };
 
     let length_bytes = (serialized_bytes.len() as u32).to_be_bytes();
-    let signature = if message.is_vote() {
+    let signature = if message.is_vote() || !enable_crypto {
         None
     } else {
         Some(private_key.sign(&serialized_bytes))
     };
-
 
     let mut failed_indices = vec![];
 
@@ -278,6 +289,7 @@ pub async fn unicast<M: SimplexMessage>(
     connections: &mut Vec<Option<TcpStream>>,
     message: M,
     recipient: u32,
+    enable_crypto: bool,
 ) {
     let serialized_bytes = match to_string(&message) {
         Ok(json) => json.into_bytes(),
@@ -288,7 +300,7 @@ pub async fn unicast<M: SimplexMessage>(
     };
 
     let length_bytes = (serialized_bytes.len() as u32).to_be_bytes();
-    let signature = if message.is_vote() {
+    let signature = if message.is_vote() || !enable_crypto {
         None
     } else {
         Some(private_key.sign(&serialized_bytes))

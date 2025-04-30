@@ -5,6 +5,7 @@ pub struct Transaction {
     pub sender: u32,
     pub id: u32,
     pub amount: Amount,
+    pub padding: String,
 }
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -23,11 +24,13 @@ impl Amount {
 }
 
 impl Transaction {
-    pub fn new(sender: u32, id: u32, amount: Amount) -> Transaction {
+    pub fn new(sender: u32, id: u32, amount: Amount, padding_size: usize) -> Self {
+        let padding = "X".repeat(padding_size); // Just repeat 'X' for simplicity
         Transaction {
             sender,
             id,
             amount,
+            padding,
         }
     }
 }

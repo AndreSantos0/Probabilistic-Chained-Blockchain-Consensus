@@ -89,7 +89,7 @@ impl Protocol for PracticalSimplex {
     }
 
     async fn send(&self, connections: &mut Vec<Option<TcpStream>>, message: Self::Message, _recipients: Option<Vec<u32>>) {
-        broadcast(self.get_private_key(), connections, message).await;
+        broadcast(self.get_private_key(), connections, message, !self.environment.test_flag).await;
     }
 
     fn create_proposal(block: SimplexBlock) -> Self::Message {
@@ -101,6 +101,9 @@ impl Protocol for PracticalSimplex {
     }
 
     fn create_vote(&self, iteration: u32, block: HashedSimplexBlock) -> Self::Message {
+        if self.environment.test_flag {
+            return PracticalSimplexMessage::Vote(Vote { iteration, header: block, signature: Vec::new() })
+        }
         let serialized_message = to_string(&block).unwrap();
         let serialized_bytes = serialized_message.as_bytes();
         PracticalSimplexMessage::Vote(Vote { iteration, header: block, signature: Vec::from(self.private_key.sign(serialized_bytes).as_ref()) })
@@ -127,7 +130,7 @@ impl Protocol for PracticalSimplex {
 
     async fn handle_message(&mut self, sender: u32, message: Self::Message, reset_tx: Sender<()>, connections: &mut Vec<Option<TcpStream>>) {
         match message {
-            PracticalSimplexMessage::Propose(propose) => self.handle_propose(propose, sender, connections).await,
+            PracticalSimplexMessage::Propose(propose) => self.handle_propose(propose, sender, reset_tx, connections).await,
             PracticalSimplexMessage::Vote(vote) => self.handle_vote(vote.clone(), sender, reset_tx.clone(), connections).await,
             PracticalSimplexMessage::Timeout(timeout) => self.handle_timeout(timeout, sender, reset_tx.clone(), connections).await,
             PracticalSimplexMessage::Finalize(finalize) => self.handle_finalize(finalize, sender, connections).await,
@@ -139,16 +142,16 @@ impl Protocol for PracticalSimplex {
 
     async fn post_notarization(&self, notarized: NotarizedBlock, connections: &mut Vec<Option<TcpStream>>) {
         let view = PracticalSimplexMessage::View(View { last_notarized: ViewBlock { block: notarized.block, signatures: notarized.signatures }});
-        notify(&self.private_key, connections, view, self.environment.my_node.id).await;
+        notify(&self.private_key, connections, view, self.environment.my_node.id, !self.environment.test_flag).await;
     }
 }
 
 impl PracticalSimplex {
 
-    async fn handle_propose(&mut self, propose: Propose, sender: u32, connections: &mut Vec<Option<TcpStream>>) {
+    async fn handle_propose(&mut self, propose: Propose, sender: u32, reset_tx: Sender<()>, connections: &mut Vec<Option<TcpStream>>) {
         //println!("Received propose {}", propose.content.length);
         let leader = Self::get_leader(self.environment.nodes.len(), propose.content.iteration);
-        if !self.proposes.contains_key(&propose.content.iteration) && sender == leader {
+        if !self.proposes.contains_key(&propose.content.iteration) && (sender == leader || self.environment.test_flag) {
             self.proposes.insert(propose.content.iteration, propose.clone());
             let iteration = self.iteration.load(Ordering::SeqCst);
             if iteration == propose.content.iteration && !self.is_timeout.load(Ordering::SeqCst) && self.blockchain.is_extendable(&propose.content) {
@@ -156,6 +159,29 @@ impl PracticalSimplex {
                 let vote = self.create_vote(iteration, block);
                 self.send(connections, vote, None).await;
                 //println!("Voted for {}", propose.content.length);
+            }
+            if iteration == propose.content.iteration {
+                let block = HashedSimplexBlock::from(&propose.content);
+                let votes = self.votes.get(&block);
+                if let Some(vote_signatures) = votes {
+                    if vote_signatures.len() >= self.quorum_size {
+                        let is_timeout = self.is_timeout.load(Ordering::SeqCst);
+                        self.blockchain.notarize(
+                            block.clone(),
+                            propose.content.transactions,
+                            vote_signatures.to_vec()
+                        ).await;
+                        self.iteration.fetch_add(1, Ordering::SeqCst);
+                        if !is_timeout {
+                            let finalize = PracticalSimplexMessage::Finalize(Finalize { iter: iteration });
+                            broadcast(&self.private_key, connections, finalize, !self.environment.test_flag).await;
+                        }
+                        let view = PracticalSimplexMessage::View(View { last_notarized: ViewBlock { block, signatures: vote_signatures.to_vec() } });
+                        notify(&self.private_key, connections, view, self.environment.my_node.id, !self.environment.test_flag).await;
+                        self.handle_iteration_advance(connections).await;
+                        let _ = reset_tx.send(()).await;
+                    }
+                }
             }
         }
     }
@@ -170,7 +196,7 @@ impl PracticalSimplex {
         //println!("Received vote {}", vote.iteration);
         let vote_signatures = self.votes.entry(vote.header).or_insert_with(Vec::new);
         let is_first_vote = !vote_signatures.iter().any(|vote_signature| vote_signature.node == sender);
-        if is_first_vote {
+        if is_first_vote || self.environment.test_flag {
             vote_signatures.push(VoteSignature { signature: vote.signature, node: sender });
             //println!("{} signatures", vote_signatures.len());
             let iteration = self.iteration.load(Ordering::SeqCst);
@@ -188,10 +214,10 @@ impl PracticalSimplex {
                             self.iteration.fetch_add(1, Ordering::SeqCst);
                             if !is_timeout {
                                 let finalize = PracticalSimplexMessage::Finalize(Finalize { iter: iteration });
-                                broadcast(&self.private_key, connections, finalize).await;
+                                broadcast(&self.private_key, connections, finalize, !self.environment.test_flag).await;
                             }
                             let view = PracticalSimplexMessage::View(View { last_notarized: ViewBlock { block: HashedSimplexBlock::from(&block.content), signatures: vote_signatures.to_vec() }});
-                            notify(&self.private_key, connections, view, self.environment.my_node.id).await;
+                            notify(&self.private_key, connections, view, self.environment.my_node.id, !self.environment.test_flag).await;
                             self.handle_iteration_advance(connections).await;
                             let _ = reset_tx.send(()).await;
                         } else if vote.iteration > iteration {
@@ -212,7 +238,7 @@ impl PracticalSimplex {
         //println!("Received timeout {}", timeout.next_iter);
         let timeouts = self.timeouts.entry(timeout.next_iter).or_insert_with(Vec::new);
         let is_first_timeout = !timeouts.iter().any(|node_id| *node_id == sender);
-        if is_first_timeout {
+        if is_first_timeout || self.environment.test_flag {
             timeouts.push(sender);
             //println!("{} matching timeouts for iter {}", timeouts.len(), timeout.next_iter);
             if timeouts.len() == self.quorum_size && timeout.next_iter == self.iteration.load(Ordering::SeqCst) + 1 {
@@ -227,7 +253,7 @@ impl PracticalSimplex {
         //println!("Received finalize {}", finalize.iter);
         let finalizes = self.finalizes.entry(finalize.iter).or_insert_with(Vec::new);
         let is_first_finalize = !finalizes.iter().any(|node_id| *node_id == sender);
-        if is_first_finalize {
+        if is_first_finalize || self.environment.test_flag {
             finalizes.push(sender);
             if finalizes.len() == self.quorum_size {
                 if let Some(_) = self.blockchain.get_block(finalize.iter) {
@@ -255,24 +281,26 @@ impl PracticalSimplex {
     ) {
         //println!("Received view {}", view.last_notarized.block.length);
         if self.blockchain.is_missing(view.last_notarized.block.length, view.last_notarized.block.iteration) && view.last_notarized.signatures.len() >= self.quorum_size {
-            for vote_signature in view.last_notarized.signatures.iter() {
-                match self.public_keys.get(&vote_signature.node) {
-                    None => return,
-                    Some(key) => {
-                        let public_key = UnparsedPublicKey::new(&ED25519, key);
-                        let serialized_message = match to_string(&view.last_notarized.block) {
-                            Ok(json) => json,
-                            Err(e) => {
-                                eprintln!("Failed to serialize message: {}", e);
-                                return;
-                            }
-                        };
-                        let bytes = serialized_message.as_bytes();
-                        match public_key.verify(bytes, vote_signature.signature.as_ref()) {
-                            Ok(_) => { }
-                            Err(_) => {
-                                eprintln!("View signature verification failed");
-                                return
+            if !self.environment.test_flag {
+                for vote_signature in view.last_notarized.signatures.iter() {
+                    match self.public_keys.get(&vote_signature.node) {
+                        None => return,
+                        Some(key) => {
+                            let public_key = UnparsedPublicKey::new(&ED25519, key);
+                            let serialized_message = match to_string(&view.last_notarized.block) {
+                                Ok(json) => json,
+                                Err(e) => {
+                                    eprintln!("Failed to serialize message: {}", e);
+                                    return;
+                                }
+                            };
+                            let bytes = serialized_message.as_bytes();
+                            match public_key.verify(bytes, vote_signature.signature.as_ref()) {
+                                Ok(_) => { }
+                                Err(_) => {
+                                    eprintln!("View signature verification failed");
+                                    return
+                                }
                             }
                         }
                     }
@@ -288,9 +316,17 @@ impl PracticalSimplex {
         if missing.is_empty() {
             return
         }
-        if let Some(sender_node) = self.environment.nodes.iter().find(|node| node.id == sender) {
-            unicast(&self.private_key, connections, PracticalSimplexMessage::Reply(Reply { blocks: missing }), sender_node.id).await;
-            //println!("Reply send");
+        match self.environment.test_flag {
+            true => {
+                broadcast(&self.private_key, connections, PracticalSimplexMessage::Reply(Reply { blocks: missing }), !self.environment.test_flag).await;
+                //println!("Reply send");
+            }
+            false => {
+                if let Some(sender_node) = self.environment.nodes.iter().find(|node| node.id == sender) {
+                    unicast(&self.private_key, connections, PracticalSimplexMessage::Reply(Reply { blocks: missing }), sender_node.id, !self.environment.test_flag).await;
+                    //println!("Reply send");
+                }
+            }
         }
     }
 
@@ -316,27 +352,29 @@ impl PracticalSimplex {
                     break;
                 }
 
-                for vote_signature in notarized.signatures.iter() {
-                    match self.public_keys.get(&vote_signature.node) {
-                        Some(key) => {
-                            let public_key = UnparsedPublicKey::new(&ED25519, key);
-                            let serialized_message = match to_string(&notarized.block) {
-                                Ok(json) => json,
-                                Err(e) => {
-                                    eprintln!("Failed to serialize message: {}", e);
-                                    break;
-                                }
-                            };
-                            let bytes = serialized_message.as_bytes();
-                            match public_key.verify(bytes, vote_signature.signature.as_ref()) {
-                                Ok(_) => { }
-                                Err(_) => {
-                                    eprintln!("Reply Signature verification failed");
-                                    break;
+                if !self.environment.test_flag {
+                    for vote_signature in notarized.signatures.iter() {
+                        match self.public_keys.get(&vote_signature.node) {
+                            Some(key) => {
+                                let public_key = UnparsedPublicKey::new(&ED25519, key);
+                                let serialized_message = match to_string(&notarized.block) {
+                                    Ok(json) => json,
+                                    Err(e) => {
+                                        eprintln!("Failed to serialize message: {}", e);
+                                        break;
+                                    }
+                                };
+                                let bytes = serialized_message.as_bytes();
+                                match public_key.verify(bytes, vote_signature.signature.as_ref()) {
+                                    Ok(_) => { }
+                                    Err(_) => {
+                                        eprintln!("Reply Signature verification failed");
+                                        break;
+                                    }
                                 }
                             }
+                            None => break,
                         }
-                        None => break,
                     }
                 }
 
@@ -348,10 +386,10 @@ impl PracticalSimplex {
                         self.iteration.swap(notarized.block.iteration + 1, Ordering::SeqCst);
                         if !self.is_timeout.load(Ordering::SeqCst) {
                             let finalize = PracticalSimplexMessage::Finalize(Finalize { iter: iteration });
-                            broadcast(&self.private_key, connections, finalize).await;
+                            broadcast(&self.private_key, connections, finalize, !self.environment.test_flag).await;
                         }
                         let view = PracticalSimplexMessage::View(View { last_notarized: ViewBlock { block: notarized.block, signatures: notarized.signatures } });
-                        notify(&self.private_key, connections, view, self.environment.my_node.id).await;
+                        notify(&self.private_key, connections, view, self.environment.my_node.id, !self.environment.test_flag).await;
                         self.handle_iteration_advance(connections).await;
                     }
                 }
@@ -363,9 +401,17 @@ impl PracticalSimplex {
     }
 
     async fn request(&self, sender: u32, connections: &mut Vec<Option<TcpStream>>) {
-        if let Some(sender_node) = self.environment.nodes.iter().find(|node| node.id == sender) {
-            unicast(&self.private_key, connections, PracticalSimplexMessage::Request(Request { last_notarized_length: self.blockchain.last_notarized().block.length }), sender_node.id).await;
-            //println!("Request send");
+        match self.environment.test_flag {
+            true => {
+                broadcast(&self.private_key, connections, PracticalSimplexMessage::Request(Request { last_notarized_length: self.blockchain.last_notarized().block.length }), !self.environment.test_flag).await;
+                //println!("Request send");
+            }
+            false => {
+                if let Some(sender_node) = self.environment.nodes.iter().find(|node| node.id == sender) {
+                    unicast(&self.private_key, connections, PracticalSimplexMessage::Request(Request { last_notarized_length: self.blockchain.last_notarized().block.length }), sender_node.id, !self.environment.test_flag).await;
+                    //println!("Request send");
+                }
+            }
         }
     }
 }

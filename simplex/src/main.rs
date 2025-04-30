@@ -7,7 +7,6 @@ mod probabilistic_simplex;
 mod practical_simplex;
 
 use std::env;
-use chrono::{Timelike};
 use shared::initializer::{get_environment, get_private_key, get_public_keys};
 use crate::practical_simplex::PracticalSimplex;
 use crate::probabilistic_simplex::ProbabilisticSimplex;

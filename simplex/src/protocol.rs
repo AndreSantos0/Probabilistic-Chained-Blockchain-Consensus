@@ -15,6 +15,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{interval, sleep, Duration};
 
 const SOCKET_BINDING_DELAY: u64 = 5;
+const TRANSACTION_SIZE: usize = 256;
 
 pub enum ProtocolMode {
     Practical,
@@ -53,7 +54,14 @@ pub trait Protocol {
                 let (reset_tx,reset_rx) = mpsc::channel::<()>(Self::RESET_TIMER_CHANNEL_SIZE);
                 let sender = Arc::new(tx);
                 sleep(Duration::from_secs(SOCKET_BINDING_DELAY)).await;
-                let mut connections = connect(self.get_environment().my_node.id, &self.get_environment().nodes, self.get_public_keys(), sender, listener).await;
+                let mut connections = connect(
+                    self.get_environment().my_node.id,
+                    &self.get_environment().nodes,
+                    self.get_public_keys(),
+                    sender,
+                    listener,
+                    !self.get_environment().test_flag
+                ).await;
                 self.start_iteration_timer(timeout_tx, reset_rx).await;
                 self.execute_protocol(rx, timeout_rx, reset_tx, &mut connections).await;
             }
@@ -105,11 +113,13 @@ pub trait Protocol {
             println!("----------------------");
             println!("----------------------");
             println!("Leader is node {} | Iteration: {}", leader, iteration);
-            self.get_blockchain().print();
+            if !self.get_environment().test_flag {
+                self.get_blockchain().print();
+            }
 
             let my_node_id = self.get_environment().my_node.id;
             if leader == my_node_id {
-                let transactions = self.get_transaction_generator().generate(my_node_id);
+                let transactions = self.get_transaction_generator().generate(my_node_id, TRANSACTION_SIZE);
                 let block = self.get_blockchain().get_next_block(iteration, transactions);
                 //println!("Proposed {}", block.length);
                 let message = Self::create_proposal(block);
@@ -164,7 +174,7 @@ pub trait Protocol {
                 Some(next_iter) = timeout_rx.recv() => {
                     if next_iter - 1 == self.get_iteration().load(Ordering::SeqCst) {
                         let timeout = Self::create_timeout(next_iter);
-                        broadcast(self.get_private_key(), connections, timeout).await;
+                        broadcast(self.get_private_key(), connections, timeout, !self.get_environment().test_flag).await;
                     }
                 }
 

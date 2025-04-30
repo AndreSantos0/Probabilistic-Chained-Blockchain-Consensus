@@ -3,6 +3,7 @@
 # chmod +x scripts/setup_nodes.sh
 # ./scripts/setup_nodes.sh 10
 # source shared/set_keys.env
+# sudo pkill -f 'target/debug/simplex'
 
 set -e
 
