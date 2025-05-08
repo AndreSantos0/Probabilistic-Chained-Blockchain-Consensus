@@ -110,11 +110,11 @@ pub trait Protocol {
             let leader = Self::get_leader(self.get_environment().nodes.len(), iteration);
             self.get_is_timeout().store(false, Ordering::SeqCst);
             self.clear_timeouts(iteration);
-            println!("----------------------");
-            println!("----------------------");
-            println!("Leader is node {} | Iteration: {}", leader, iteration);
+            //println!("----------------------");
+            //println!("----------------------");
+            //println!("Leader is node {} | Iteration: {}", leader, iteration);
             if !self.get_environment().test_flag {
-                self.get_blockchain().print();
+                //self.get_blockchain().print();
             }
 
             let my_node_id = self.get_environment().my_node.id;

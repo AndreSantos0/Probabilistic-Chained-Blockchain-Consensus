@@ -22,6 +22,10 @@ cat << 'EOF' > remote_script.sh
 #!/bin/bash
 set -e
 
+cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+chmod 700 ~/.ssh
+
 REPO_URL="https://github.com/AndreSantos0/Probabilistic-Chained-Blockchain-Consensus.git"
 REPO_DIR="Probabilistic-Chained-Blockchain-Consensus"
 SHARED_DIR="$REPO_DIR/shared"
@@ -107,6 +111,7 @@ echo "🚀 Deploying script to nodes..."
 
 while read -r node; do
   echo "Deploying to node: $node"
+  scp ~/.ssh/id_rsa.pub $SSH_USER@"$node":~/.ssh/
   scp remote_script.sh $SSH_USER@"$node":$REMOTE_SCRIPT
   ssh -n $SSH_USER@"$node" "bash $REMOTE_SCRIPT"
 done < "$NODES_FILE"

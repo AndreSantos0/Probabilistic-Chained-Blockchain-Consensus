@@ -1,0 +1,2 @@
+num_nodes,blocks_finalized,duration_sec,tx_size_bytes,txs_per_block
+4,1379,60,256,10
