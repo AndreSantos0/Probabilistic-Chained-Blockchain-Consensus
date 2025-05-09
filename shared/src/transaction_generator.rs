@@ -4,7 +4,7 @@ use crate::domain::transaction::{Amount, Transaction};
 const INITIAL_NONCE: u32 = 1;
 const DEFAULT_AMOUNT_INTEGRAL: u64 = 50;
 const DEFAULT_AMOUNT_FRACTIONAL: u64 = 0;
-const NUMBER_OF_TRANSACTIONS: usize = 1000;
+const NUMBER_OF_TRANSACTIONS: usize = 100;
 
 pub struct TransactionGenerator {
     nonce: u32,

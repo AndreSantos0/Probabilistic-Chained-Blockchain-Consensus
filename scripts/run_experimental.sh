@@ -10,6 +10,7 @@ REMOTE_DIR="Probabilistic-Chained-Blockchain-Consensus"
 LOCAL_RESULTS_DIR="results"
 SHARED_DIR="$REMOTE_DIR/shared"
 SET_KEYS_FILE="$SHARED_DIR/set_keys.env"
+NDJSON_FILE="$LOCAL_RESULTS_DIR/FinalizedBlocks_0.ndjson"
 
 ARGS=()
 if [[ "$2" == "test" ]] || [[ "$1" == "test" ]]; then
@@ -69,3 +70,15 @@ while read -r node; do
 done < "$NODES_FILE"
 
 echo "✅ All results collected in '$LOCAL_RESULTS_DIR/'"
+
+# Get the last line of the file
+last_line=$(tail -n 1 "$NDJSON_FILE")
+
+# Extract the value of "length" using grep and sed
+length=$(echo "$last_line" | grep -o '"length":[0-9]*' | sed 's/[^0-9]*//')
+
+if [ -n "$length" ]; then
+  echo "Length field value: $length"
+else
+  echo "Could not find length field."
+fi
