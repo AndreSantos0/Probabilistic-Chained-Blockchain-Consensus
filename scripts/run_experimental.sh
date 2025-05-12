@@ -61,13 +61,10 @@ set -e  # Re-enable strict mode
 echo "✅ All remote executions complete."
 
 # Now retrieve result files
-node_id=0
-while read -r node; do
-  FILE_NAME="FinalizedBlocks_${node_id}.ndjson"
-  echo "📥 Retrieving result file $FILE_NAME from node $node..."
-  scp "$SSH_USER@$node:$REMOTE_DIR/$FILE_NAME" "$LOCAL_RESULTS_DIR/$FILE_NAME" || echo "⚠️ Failed to retrieve $FILE_NAME from $node"
-  ((node_id++))
-done < "$NODES_FILE"
+
+FILE_NAME="FinalizedBlocks_0.ndjson"
+echo "📥 Retrieving result file $FILE_NAME from node $node..."
+scp "$SSH_USER@$node:$REMOTE_DIR/$FILE_NAME" "$LOCAL_RESULTS_DIR/$FILE_NAME" || echo "⚠️ Failed to retrieve $FILE_NAME from $node"
 
 echo "✅ All results collected in '$LOCAL_RESULTS_DIR/'"
 

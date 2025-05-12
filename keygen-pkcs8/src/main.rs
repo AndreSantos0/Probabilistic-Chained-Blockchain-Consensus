@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 
 fn main() {
-    let num_keys = 4;
+    let num_keys = 10;
     let rng = SystemRandom::new();
 
     let file = File::create("keys").expect("failed to create file");
