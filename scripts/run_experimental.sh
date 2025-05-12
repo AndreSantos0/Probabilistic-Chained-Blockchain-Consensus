@@ -61,10 +61,17 @@ set -e  # Re-enable strict mode
 echo "✅ All remote executions complete."
 
 # Now retrieve result files
+node_id=0
+read -r node < "$NODES_FILE"  # Read only the first line from the file
 
-FILE_NAME="FinalizedBlocks_0.ndjson"
-echo "📥 Retrieving result file $FILE_NAME from node $node..."
-scp "$SSH_USER@$node:$REMOTE_DIR/$FILE_NAME" "$LOCAL_RESULTS_DIR/$FILE_NAME" || echo "⚠️ Failed to retrieve $FILE_NAME from $node"
+if [[ -n "$node" ]]; then
+  FILE_NAME="FinalizedBlocks_0.ndjson"
+  echo "📥 Retrieving result file $FILE_NAME from node $node..."
+  scp "$SSH_USER@$node:$REMOTE_DIR/$FILE_NAME" "$LOCAL_RESULTS_DIR/$FILE_NAME" || echo "⚠️ Failed to retrieve $FILE_NAME from $node"
+  ((node_id++))
+else
+  echo "❌ No node found in $NODES_FILE"
+fi
 
 echo "✅ All results collected in '$LOCAL_RESULTS_DIR/'"
 
