@@ -15,7 +15,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{interval, sleep, Duration};
 
 const SOCKET_BINDING_DELAY: u64 = 5;
-const TRANSACTION_SIZE: usize = 256;
+const TRANSACTION_SIZE: usize = 1024;
 
 pub enum ProtocolMode {
     Practical,
