@@ -64,7 +64,7 @@ pub async fn accept_connections(my_node_id: u32, nodes: &Vec<Node>, listener: Tc
 }
 
 fn is_allowed(addr: SocketAddr) -> bool {
-    addr.ip().is_loopback() //TODO: Discuss this
+    addr.ip().is_loopback()
 }
 
 async fn handle_connection<M>(
@@ -156,48 +156,6 @@ pub async fn broadcast<M>(
             eprintln!("Failed to send signature to socket: {}", e);
             connections.remove(i);
             continue;
-        }
-    }
-}
-
-pub async fn notify<M>(
-    private_key: &Ed25519KeyPair,
-    connections: &mut Vec<TcpStream>,
-    message: M,
-    host: &String,
-    port: u16,
-) where M: Serialize {
-    let serialized_message = match to_string(&message) {
-        Ok(json) => json,
-        Err(e) => {
-            eprintln!("Failed to serialize message: {}", e);
-            return;
-        }
-    };
-
-    let serialized_bytes = serialized_message.as_bytes();
-    let length = serialized_bytes.len() as u32;
-    let length_bytes = length.to_be_bytes();
-    let signature = private_key.sign(serialized_bytes);
-
-    for i in 0..connections.len() {
-        let stream = &mut connections[i];
-        if stream.peer_addr().unwrap().to_string() != format!("{}:{}", host, port) {
-            if let Err(e) = stream.write_all(&length_bytes).await {
-                eprintln!("Failed to send message length to socket: {}", e);
-                connections.remove(i);
-                continue;
-            }
-            if let Err(e) = stream.write_all(serialized_bytes).await {
-                eprintln!("Failed to send message to socket: {}", e);
-                connections.remove(i);
-                continue;
-            }
-            if let Err(e) = stream.write_all(signature.as_ref()).await {
-                eprintln!("Failed to send signature to socket: {}", e);
-                connections.remove(i);
-                continue;
-            }
         }
     }
 }

@@ -1,7 +1,6 @@
-use crate::block::{HashedSimplexBlock, NodeId, NotarizedBlock, SimplexBlock};
+use crate::block::{SimplexBlockHeader, NodeId, NotarizedBlock, SimplexBlock};
 use crate::blockchain::Blockchain;
-use crate::connection::{broadcast, connect};
-use crate::message::SimplexMessage;
+use crate::message::{Dispatch, SimplexMessage};
 use ring::signature::Ed25519KeyPair;
 use sha2::{Digest, Sha256};
 use shared::domain::environment::Environment;
@@ -9,13 +8,11 @@ use shared::transaction_generator::TransactionGenerator;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use log::{error, info};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{interval, sleep, Duration};
-
-const SOCKET_BINDING_DELAY: u64 = 5;
-const TRANSACTION_SIZE: usize = 1024;
 
 pub enum ProtocolMode {
     Practical,
@@ -24,18 +21,17 @@ pub enum ProtocolMode {
 
 pub trait Protocol {
 
-    const INITIAL_ITERATION: u32;
-    const ITERATION_TIME: u64;
-    const MESSAGE_CHANNEL_SIZE: usize;
-    const TIMEOUT_CHANNEL_SIZE: usize;
-    const RESET_TIMER_CHANNEL_SIZE: usize;
+    const INITIAL_ITERATION: u32 = 1;
+    const ITERATION_TIME: u64 = 5;
+    const MESSAGE_CHANNEL_SIZE: usize = 100;
+    const RESET_TIMER_CHANNEL_SIZE: usize = 1;
+    const SOCKET_BINDING_DELAY: u64 = 5;
+    const TRANSACTION_SIZE: usize = 32;
 
     type Message: SimplexMessage;
 
     fn new(environment: Environment, public_keys: HashMap<u32, Vec<u8>>, private_key: Ed25519KeyPair) -> Self;
     fn get_environment(&self) -> &Environment;
-    fn get_public_keys(&self) -> &HashMap<u32, Vec<u8>>;
-    fn get_private_key(&self) -> &Ed25519KeyPair;
     fn get_iteration(&self) -> &Arc<AtomicU32>;
     fn get_is_timeout(&self) -> &Arc<AtomicBool>;
     fn get_blockchain(&mut self) -> &mut Blockchain;
@@ -49,27 +45,20 @@ pub trait Protocol {
         let address = format!("{}:{}", self.get_environment().my_node.host, self.get_environment().my_node.port);
         match TcpListener::bind(address).await {
             Ok(listener) => {
-                let (tx, rx) = mpsc::channel::<(NodeId, Self::Message)>(Self::MESSAGE_CHANNEL_SIZE);
-                let (timeout_tx, timeout_rx) = mpsc::channel::<u32>(Self::TIMEOUT_CHANNEL_SIZE);
-                let (reset_tx,reset_rx) = mpsc::channel::<()>(Self::RESET_TIMER_CHANNEL_SIZE);
-                let sender = Arc::new(tx);
-                sleep(Duration::from_secs(SOCKET_BINDING_DELAY)).await;
-                let mut connections = connect(
-                    self.get_environment().my_node.id,
-                    &self.get_environment().nodes,
-                    self.get_public_keys(),
-                    sender,
-                    listener,
-                    !self.get_environment().test_flag
-                ).await;
-                self.start_iteration_timer(timeout_tx, reset_rx).await;
-                self.execute_protocol(rx, timeout_rx, reset_tx, &mut connections).await;
+                let (consumer_queue_sender, consumer_queue_receiver) = mpsc::channel::<(NodeId, Self::Message)>(Self::MESSAGE_CHANNEL_SIZE);
+                let (dispatcher_queue_sender, dispatcher_queue_receiver) = mpsc::channel::<Dispatch>(Self::MESSAGE_CHANNEL_SIZE);
+                let (reset_timer_sender, reset_timer_receiver) = mpsc::channel::<()>(Self::RESET_TIMER_CHANNEL_SIZE);
+                sleep(Duration::from_secs(Self::SOCKET_BINDING_DELAY)).await;
+                let connections = self.connect(consumer_queue_sender, listener).await;
+                self.start_message_dispatcher(dispatcher_queue_receiver, connections).await;
+                self.start_iteration_timer(dispatcher_queue_sender.clone(), reset_timer_receiver).await;
+                self.execute_protocol(consumer_queue_receiver, dispatcher_queue_sender, reset_timer_sender).await;
             }
-            Err(_) => { eprintln!("[Node {}] Failed to bind local port", self.get_environment().my_node.id) }
+            Err(_) => { error!("[Node {}] Failed to bind local port", self.get_environment().my_node.id) }
         };
     }
 
-    async fn start_iteration_timer(&self, timeout_tx: Sender<u32>, mut reset_rx: Receiver<()>) {
+    async fn start_iteration_timer(&self, dispatcher_queue_sender: Sender<Dispatch>, mut reset_timer_receiver: Receiver<()>) {
         let iteration_counter = self.get_iteration().clone();
         let is_timeout = self.get_is_timeout().clone();
         let mut timer = interval(Duration::from_secs(Self::ITERATION_TIME));
@@ -81,13 +70,14 @@ pub trait Protocol {
                     _ = timer.tick() => {
                         if iteration == iteration_counter.load(Ordering::SeqCst) {
                             is_timeout.store(true, Ordering::SeqCst);
-                            let _ = timeout_tx.send(iteration + 1).await;
-                            reset_rx.recv().await;
+                            let timeout = Self::create_timeout(iteration + 1);
+                            let _ = dispatcher_queue_sender.send(timeout).await;
+                            reset_timer_receiver.recv().await;
                             timer = interval(Duration::from_secs(Self::ITERATION_TIME));
                             timer.tick().await;
                         }
                     }
-                    _ = reset_rx.recv() => {
+                    _ = reset_timer_receiver.recv() => {
                         timer = interval(Duration::from_secs(Self::ITERATION_TIME));
                         timer.tick().await;
                     }
@@ -104,36 +94,34 @@ pub trait Protocol {
         (hash_u64 % n_nodes as u64) as u32
     }
 
-    async fn handle_iteration_advance(&mut self, connections: &mut Vec<Option<TcpStream>>) {
+    async fn handle_iteration_advance(&mut self, dispatcher_queue_sender: &Sender<Dispatch>) {
         loop {
             let iteration = self.get_iteration().load(Ordering::SeqCst);
             let leader = Self::get_leader(self.get_environment().nodes.len(), iteration);
             self.get_is_timeout().store(false, Ordering::SeqCst);
             self.clear_timeouts(iteration);
-            //println!("----------------------");
-            //println!("----------------------");
-            //println!("Leader is node {} | Iteration: {}", leader, iteration);
+            info!("----------------------");
+            info!("----------------------");
+            info!("Leader is node {} | Iteration: {}", leader, iteration);
             if !self.get_environment().test_flag {
-                //self.get_blockchain().print();
+                self.get_blockchain().print();
             }
 
             let my_node_id = self.get_environment().my_node.id;
             if leader == my_node_id {
-                let transactions = self.get_transaction_generator().generate(my_node_id, TRANSACTION_SIZE);
+                let transactions = self.get_transaction_generator().generate(my_node_id);
                 let block = self.get_blockchain().get_next_block(iteration, transactions);
-                //println!("Proposed {}", block.length);
-                let message = Self::create_proposal(block);
-                self.send(connections, message, None).await;
+                info!("Proposed {}", block.length);
+                let propose = self.create_proposal(block);
+                let _ = dispatcher_queue_sender.send(propose).await;
             }
 
             if let Some(propose) = self.get_proposal_block(iteration) {
                 let proposed_block = propose.clone();
                 if !self.get_is_timeout().load(Ordering::SeqCst) && self.get_blockchain().is_extendable(&proposed_block) {
-                    let block = HashedSimplexBlock::from(&proposed_block);
-                    let vote = self.create_vote(iteration, block);
-                    let sample = vote.get_sample();
-                    self.send(connections, vote, sample).await;
-                    //println!("Voted for {}", proposed_block.length);
+                    let block = SimplexBlockHeader::from(&proposed_block);
+                    let vote = Self::create_vote(iteration, block);
+                    let _ = dispatcher_queue_sender.send(vote).await;
                 }
             }
 
@@ -148,11 +136,10 @@ pub trait Protocol {
                     self.get_blockchain().notarize(notarized.block.clone(), notarized.transactions.clone(), notarized.signatures.clone()).await;
                     self.get_iteration().fetch_add(1, Ordering::SeqCst);
                     if !self.get_is_timeout().load(Ordering::SeqCst) {
-                        let finalize = self.create_finalize(iteration);
-                        let sample = finalize.get_sample();
-                        self.send(connections, finalize, sample).await;
+                        let finalize = Self::create_finalize(iteration);
+                        let _ = dispatcher_queue_sender.send(finalize).await;
                     }
-                    self.post_notarization(notarized, connections).await;
+                    self.post_notarization(notarized, dispatcher_queue_sender).await;
                 }
             }
         }
@@ -160,39 +147,30 @@ pub trait Protocol {
 
     async fn execute_protocol(
         &mut self,
-        mut message_queue_receiver: Receiver<(u32, Self::Message)>,
-        mut timeout_rx: Receiver<u32>,
-        reset_tx: Sender<()>,
-        connections: &mut Vec<Option<TcpStream>>,
+        mut consumer_queue_receiver: Receiver<(u32, Self::Message)>,
+        dispatcher_queue_sender: Sender<Dispatch>,
+        reset_timer_sender: Sender<()>,
     )
     where
         Self: Sized,
     {
-        self.handle_iteration_advance(connections).await;
+        self.handle_iteration_advance(&dispatcher_queue_sender).await;
         loop {
-            tokio::select! {
-                Some(next_iter) = timeout_rx.recv() => {
-                    if next_iter - 1 == self.get_iteration().load(Ordering::SeqCst) {
-                        let timeout = Self::create_timeout(next_iter);
-                        broadcast(self.get_private_key(), connections, timeout, !self.get_environment().test_flag).await;
-                    }
-                }
-
-                Some((sender, message)) = message_queue_receiver.recv() => {
-                    self.handle_message(sender, message, reset_tx.clone(), connections).await;
-                }
+            if let Some((sender, message)) = consumer_queue_receiver.recv().await {
+                self.handle_message(sender, message, &dispatcher_queue_sender, &reset_timer_sender).await;
             }
         }
     }
 
-    async fn send(&self, connections: &mut Vec<Option<TcpStream>>, message: Self::Message, recipients: Option<Vec<u32>>);
-    fn create_proposal(block: SimplexBlock) -> Self::Message;
-    fn create_timeout(next_iteration: u32) -> Self::Message;
-    fn create_vote(&self, iteration: u32, block: HashedSimplexBlock) -> Self::Message;
-    fn create_finalize(&self, iteration: u32) -> Self::Message;
+    async fn connect(&self, message_queue_sender: Sender<(NodeId, Self::Message)>, listener: TcpListener) -> Vec<Option<TcpStream>>;
+    fn create_proposal(&self, block: SimplexBlock) -> Dispatch;
+    fn create_timeout(next_iteration: u32) -> Dispatch;
+    fn create_vote(iteration: u32, block: SimplexBlockHeader) -> Dispatch;
+    fn create_finalize(iteration: u32) -> Dispatch;
     fn get_proposal_block(&self, iteration: u32) -> Option<&SimplexBlock>;
     fn get_timeouts(&self, iteration: u32) -> usize;
     fn clear_timeouts(&mut self, iteration: u32);
-    async fn handle_message(&mut self, sender: u32, message: Self::Message, reset_tx: Sender<()>, connections: &mut Vec<Option<TcpStream>>);
-    async fn post_notarization(&self, notarized: NotarizedBlock, connections: &mut Vec<Option<TcpStream>>);
+    async fn handle_message(&mut self, sender: u32, message: Self::Message, dispatcher_queue_sender: &Sender<Dispatch>, reset_timer_sender: &Sender<()>);
+    async fn post_notarization(&self, _notarized: NotarizedBlock, _dispatcher_queue_sender: &Sender<Dispatch>) {}
+    async fn start_message_dispatcher(&self, dispatcher_queue_receiver: Receiver<Dispatch>, connections: Vec<Option<TcpStream>>);
 }

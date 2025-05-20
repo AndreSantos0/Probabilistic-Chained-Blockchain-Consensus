@@ -7,14 +7,22 @@ mod probabilistic_simplex;
 mod practical_simplex;
 
 use std::env;
+use env_logger::Env;
 use shared::initializer::{get_environment, get_private_key, get_public_keys};
 use crate::practical_simplex::PracticalSimplex;
 use crate::probabilistic_simplex::ProbabilisticSimplex;
 use crate::protocol::{Protocol, ProtocolMode};
 
+
 #[tokio::main]
 async fn main() {
+    let enable_logging = true;
     let args: Vec<String> = env::args().collect();
+    if enable_logging {
+        env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+    } else {
+        log::set_max_level(log::LevelFilter::Off);
+    }
     let protocol_mode = if args.iter().any(|arg| arg == "probabilistic") {
         ProtocolMode::Probabilistic
     } else {

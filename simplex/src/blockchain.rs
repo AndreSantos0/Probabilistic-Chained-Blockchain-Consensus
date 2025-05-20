@@ -1,4 +1,5 @@
-use crate::block::{HashedSimplexBlock, NotarizedBlock, SimplexBlock, VoteSignature};
+use log::info;
+use crate::block::{SimplexBlockHeader, NotarizedBlock, SimplexBlock, VoteSignature};
 use serde_json::to_string;
 use sha2::{Digest, Sha256};
 use shared::domain::transaction::Transaction;
@@ -27,8 +28,8 @@ impl Blockchain {
         Blockchain { notarized: block_nodes, my_node_id, to_be_finalized: Vec::new(), to_be_notarized: Vec::new(), finalized_height: INITIAL_FINALIZED_HEIGHT }
     }
 
-    fn genesis_block() -> HashedSimplexBlock {
-        HashedSimplexBlock { hash: None, iteration: GENESIS_ITERATION, length: GENESIS_LENGTH, transactions: Vec::new() }
+    fn genesis_block() -> SimplexBlockHeader {
+        SimplexBlockHeader { hash: None, iteration: GENESIS_ITERATION, length: GENESIS_LENGTH, transactions: Vec::new() }
     }
 
     pub fn last_notarized(&self) -> &NotarizedBlock {
@@ -55,7 +56,7 @@ impl Blockchain {
         SimplexBlock::new(Some(hash), iteration, last.block.length + 1, transactions)
     }
 
-    pub fn add_to_be_notarized(&mut self, block: HashedSimplexBlock, transactions: Vec<Transaction>, signatures: Vec<VoteSignature>) {
+    pub fn add_to_be_notarized(&mut self, block: SimplexBlockHeader, transactions: Vec<Transaction>, signatures: Vec<VoteSignature>) {
         self.to_be_notarized.push(NotarizedBlock { block, signatures, transactions })
     }
 
@@ -80,7 +81,7 @@ impl Blockchain {
         self.notarized.iter().find(|notarized| Some(Blockchain::hash(notarized)) == *hash)
     }
 
-    pub async fn notarize(&mut self, block: HashedSimplexBlock, transactions: Vec<Transaction>, signatures: Vec<VoteSignature>) {
+    pub async fn notarize(&mut self, block: SimplexBlockHeader, transactions: Vec<Transaction>, signatures: Vec<VoteSignature>) {
         let iteration = block.iteration;
         self.notarized.push(NotarizedBlock { block, signatures, transactions });
         if self.to_be_finalized.contains(&iteration) {
@@ -165,7 +166,7 @@ impl Blockchain {
 
     pub fn print(&self) {
         for notarized in self.notarized.iter() {
-            println!("[Iteration: {} | Length: {}]", notarized.block.iteration, notarized.block.length);
+            info!("[Iteration: {} | Length: {}]", notarized.block.iteration, notarized.block.length);
         }
     }
 }
