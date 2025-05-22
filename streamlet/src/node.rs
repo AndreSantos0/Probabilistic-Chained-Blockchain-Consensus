@@ -44,7 +44,7 @@ impl StreamletNode {
             epoch: Arc::new(AtomicU32::new(INITIAL_EPOCH)),
             is_new_epoch: Arc::new(AtomicBool::new(false)),
             blockchain: Blockchain::new(my_node_id),
-            transaction_generator: TransactionGenerator::new(),
+            transaction_generator: TransactionGenerator::new(TRANSACTION_SIZE),
             blocks: HashMap::new(),
             votes_ids: HashMap::new(),
             public_keys,
@@ -153,7 +153,7 @@ impl StreamletNode {
 
     async fn propose(&mut self, connections: &mut Vec<TcpStream>) {
         let epoch = self.epoch.load(Ordering::SeqCst);
-        let transactions = self.transaction_generator.generate(self.environment.my_node.id, TRANSACTION_SIZE);
+        let transactions = self.transaction_generator.generate(self.environment.my_node.id);
         let block = self.blockchain.get_next_block(epoch, transactions);
         let message = StreamletMessage::Propose(Propose { content: block });
         broadcast(&self.private_key, connections, message).await;
