@@ -515,7 +515,7 @@ impl ProbabilisticSimplex {
                     if !self.environment.test_flag {
                         self.blockchain.finalize(finalize.iter).await;
                     }
-                    self.proposes.retain(|iteration, _| *iteration > finalize.iter + FINALIZATION_GAP);
+                    self.proposes.retain(|iteration, _| *iteration + FINALIZATION_GAP > finalize.iter);
                     self.votes.retain(|_, signatures| signatures.len() < self.probabilistic_quorum_size);
                     self.finalizes.retain(|iteration, _| *iteration > finalize.iter);
                 } else {
