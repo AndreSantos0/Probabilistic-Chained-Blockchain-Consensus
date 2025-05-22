@@ -1,6 +1,6 @@
 use crate::block::{NodeId, NotarizedBlock, SimplexBlock, SimplexBlockHeader, VoteSignature};
 use crate::blockchain::Blockchain;
-use crate::connection::{broadcast, generate_nonce, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
+use crate::connection::{broadcast, generate_nonce, notify, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
 use crate::message::{Dispatch, Finalize, PracticalSimplexMessage, Propose, Reply, Request, SimplexMessage, Timeout, View, Vote};
 use crate::protocol::Protocol;
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey, ED25519};
@@ -177,12 +177,13 @@ impl Protocol for PracticalSimplex {
     }
 
     async fn start_message_dispatcher(&self, mut dispatcher_queue_receiver: Receiver<Dispatch>, mut connections: Vec<Option<TcpStream>>) {
-        let private_key = get_private_key(self.environment.my_node.id);
+        let my_node_id = self.environment.my_node.id;
+        let private_key = get_private_key(my_node_id);
         let enable_crypto = !self.environment.test_flag;
         tokio::spawn(async move {
             loop {
                 if let Some(message) = dispatcher_queue_receiver.recv().await {
-                    Self::dispatch_message(message, &private_key, enable_crypto, &mut connections).await;
+                    Self::dispatch_message(message, &private_key, enable_crypto, my_node_id, &mut connections).await;
                 }
             }
         });
@@ -191,7 +192,7 @@ impl Protocol for PracticalSimplex {
 
 impl PracticalSimplex {
 
-    async fn dispatch_message(content: Dispatch, private_key: &Ed25519KeyPair, enable_crypto: bool, connections: &mut Vec<Option<TcpStream>>) {
+    async fn dispatch_message(content: Dispatch, private_key: &Ed25519KeyPair, enable_crypto: bool, my_node_id: u32, connections: &mut Vec<Option<TcpStream>>) {
         match content {
             Dispatch::Propose(block) => {
                 let propose = PracticalSimplexMessage::Propose(Propose { content: block });
@@ -223,7 +224,7 @@ impl PracticalSimplex {
             }
             Dispatch::View(header, cert) => {
                 let view = PracticalSimplexMessage::View(View { last_notarized_block_header: header, last_notarized_block_cert: cert });
-                broadcast(private_key, connections, view, enable_crypto).await;
+                notify(private_key, connections, view, my_node_id, enable_crypto).await;
             }
             Dispatch::Request(last_notarized_length, sender) => {
                 let request = PracticalSimplexMessage::Request(Request { last_notarized_length });
@@ -492,7 +493,7 @@ impl PracticalSimplex {
         }
     }
 
-    async fn handle_request(&mut self, request: Request, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
+    async fn handle_request(&self, request: Request, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
         info!("Request received");
         let missing = self.blockchain.get_missing(request.last_notarized_length).await;
         if missing.is_empty() {

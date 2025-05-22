@@ -121,34 +121,40 @@ impl Blockchain {
     }
 
     pub async fn finalize(&mut self, iteration: u32) {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .append(true)
-            .open(format!("{}{}.ndjson", FINALIZED_BLOCKS_FILENAME, self.my_node_id))
-            .await.expect("Could not find Blockchain file");
-
-        let mut blocks_to_be_finalized: Vec<&NotarizedBlock> = Vec::new();
-
-        let blocks: Vec<&NotarizedBlock> = self.notarized.iter()
+        let blocks: Vec<NotarizedBlock> = self.notarized.iter()
             .filter(|notarized| notarized.block.iteration <= iteration && notarized.block.iteration > self.finalized_height)
+            .cloned()
             .collect();
 
+        let mut blocks_to_be_finalized: Vec<NotarizedBlock> = Vec::new();
         let mut last_parent_hash = None;
         for notarized in blocks.iter().rev() {
-            if last_parent_hash == Some(Self::hash(notarized)) || last_parent_hash == None {
+            if last_parent_hash == Some(Self::hash(notarized)) || last_parent_hash.is_none() {
                 last_parent_hash = notarized.block.hash.clone();
-                blocks_to_be_finalized.push(notarized);
+                blocks_to_be_finalized.push(notarized.clone());
             }
         }
 
-        for notarized in blocks_to_be_finalized.iter().rev() {
-            let block_data = to_string(&notarized).expect("Failed to serialize Block") + "\n";
-            file.write_all(block_data.as_bytes()).await.expect("Error writing block to file");
-        }
+        let node_id = self.my_node_id;
+        tokio::spawn(async move {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .append(true)
+                .open(format!("{}{}.ndjson", FINALIZED_BLOCKS_FILENAME, node_id))
+                .await
+                .expect("Could not open blockchain file");
+
+            for notarized in blocks_to_be_finalized.iter().rev() {
+                let block_data = to_string(&notarized).expect("Failed to serialize block") + "\n";
+                file.write_all(block_data.as_bytes()).await.expect("Error writing block to file");
+            }
+        });
+
         self.finalized_height = iteration;
         self.notarized.retain(|notarized| notarized.block.iteration >= iteration);
     }
+
 
     async fn get_finalized_block(&self, length: u32) -> Option<NotarizedBlock> {
         let file = File::open(format!("{}{}.ndjson", FINALIZED_BLOCKS_FILENAME, self.my_node_id)).await.expect("Could not find Blockchain file");

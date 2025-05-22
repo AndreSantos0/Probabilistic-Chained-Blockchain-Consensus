@@ -37,6 +37,7 @@ pub struct ProbabilisticSimplex {
 
 const CONST_O: f32 = 1.7;
 const CONST_L: f32 = 1.0;
+const FINALIZATION_GAP: u32 = 10;
 
 impl Protocol for ProbabilisticSimplex {
 
@@ -514,7 +515,7 @@ impl ProbabilisticSimplex {
                     if !self.environment.test_flag {
                         self.blockchain.finalize(finalize.iter).await;
                     }
-                    self.proposes.retain(|iteration, _| *iteration > finalize.iter);
+                    self.proposes.retain(|iteration, _| *iteration - FINALIZATION_GAP > finalize.iter);
                     self.votes.retain(|_, signatures| signatures.len() < self.probabilistic_quorum_size);
                     self.finalizes.retain(|iteration, _| *iteration > finalize.iter);
                 } else {
@@ -526,7 +527,7 @@ impl ProbabilisticSimplex {
         }
     }
 
-    async fn handle_request(&mut self, request: Request, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
+    async fn handle_request(&self, request: Request, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
         info!("Request received");
         let missing = self.blockchain.get_missing(request.last_notarized_length).await;
         if missing.is_empty() {
