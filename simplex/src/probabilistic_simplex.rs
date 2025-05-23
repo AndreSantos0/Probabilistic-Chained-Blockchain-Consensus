@@ -9,10 +9,13 @@ use sha2::{Digest, Sha256};
 use shared::domain::environment::Environment;
 use shared::transaction_generator::TransactionGenerator;
 use shared::vrf::{vrf_prove, vrf_verify};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use log::{error, info, warn};
+use rand::{thread_rng, RngCore, SeedableRng};
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -208,23 +211,38 @@ impl ProbabilisticSimplex {
             }
             Dispatch::Vote(iteration, header) => {
                 let next_leader = Self::get_leader(n_nodes, iteration + 1);
-                let (sample, proof) = vrf_prove(private_key, &format!("{}vote", iteration), sample_size, n_nodes as u32, next_leader);
-                let signature = if !enable_crypto {
-                    Vec::new()
-                } else {
+                if enable_crypto {
+                    let (sample, proof) = vrf_prove(private_key, &format!("{}vote", iteration), sample_size, n_nodes as u32, next_leader);
                     let serialized_message = to_string(&header).unwrap();
                     let serialized_bytes = serialized_message.as_bytes();
-                    Vec::from(private_key.sign(serialized_bytes).as_ref())
-                };
-
-                let vote = ProbabilisticSimplexMessage::Vote(ProbVote {
-                    iteration,
-                    header,
-                    signature,
-                    sample: sample.clone().into_iter().collect(),
-                    proof,
-                });
-                broadcast_to_sample(private_key, connections, vote, sample.into_iter().collect(), enable_crypto).await;
+                    let signature = Vec::from(private_key.sign(serialized_bytes).as_ref());
+                    let vote = ProbabilisticSimplexMessage::Vote(ProbVote {
+                        iteration,
+                        header,
+                        signature,
+                        sample: sample.clone().into_iter().collect(),
+                        proof,
+                    });
+                    broadcast_to_sample(private_key, connections, vote, sample.into_iter().collect(), enable_crypto).await;
+                } else {
+                    let mut possible_ids: Vec<u32> = (0..n_nodes as u32).collect();
+                    possible_ids.retain(|&id| id != next_leader);
+                    let mut seed = [0u8; 32];
+                    thread_rng().fill_bytes(&mut seed);
+                    let mut rng = StdRng::from_seed(seed);
+                    possible_ids.shuffle(&mut rng);
+                    let mut sample: HashSet<u32> = possible_ids.into_iter().take(sample_size - 1).collect();
+                    sample.insert(next_leader);
+                    let signature = Vec::new();
+                    let vote = ProbabilisticSimplexMessage::Vote(ProbVote {
+                        iteration,
+                        header,
+                        signature,
+                        sample: sample.clone().into_iter().collect(),
+                        proof: Vec::new(),
+                    });
+                    broadcast_to_sample(private_key, connections, vote, sample.into_iter().collect(), enable_crypto).await;
+                }
             }
             Dispatch::Timeout(next_iter) => {
                 let timeout = ProbabilisticSimplexMessage::Timeout(Timeout { next_iter });
@@ -397,27 +415,29 @@ impl ProbabilisticSimplex {
                 if self.proposes.contains_key(&propose.last_notarized_iter) && propose.last_notarized_cert.len() >= self.quorum_size && iteration == propose.last_notarized_iter {
                     let block = self.proposes.get(&propose.last_notarized_iter).unwrap();
                     let header = SimplexBlockHeader::from(block);
-                    for vote_signature in propose.last_notarized_cert.iter() {
-                        match self.public_keys.get(&vote_signature.node) {
-                            Some(key) => {
-                                let public_key = UnparsedPublicKey::new(&ED25519, key);
-                                let serialized_message = match to_string(&header) {
-                                    Ok(json) => json,
-                                    Err(e) => {
-                                        error!("Failed to serialize message: {}", e);
-                                        return;
-                                    }
-                                };
-                                let bytes = serialized_message.as_bytes();
-                                match public_key.verify(bytes, vote_signature.signature.as_ref()) {
-                                    Ok(_) => { }
-                                    Err(_) => {
-                                        warn!("Propose Signature verification failed");
-                                        return;
+                    if !self.environment.test_flag {
+                        for vote_signature in propose.last_notarized_cert.iter() {
+                            match self.public_keys.get(&vote_signature.node) {
+                                Some(key) => {
+                                    let public_key = UnparsedPublicKey::new(&ED25519, key);
+                                    let serialized_message = match to_string(&header) {
+                                        Ok(json) => json,
+                                        Err(e) => {
+                                            error!("Failed to serialize message: {}", e);
+                                            return;
+                                        }
+                                    };
+                                    let bytes = serialized_message.as_bytes();
+                                    match public_key.verify(bytes, vote_signature.signature.as_ref()) {
+                                        Ok(_) => { }
+                                        Err(_) => {
+                                            warn!("Propose Signature verification failed");
+                                            return;
+                                        }
                                     }
                                 }
+                                None => return,
                             }
-                            None => return,
                         }
                     }
                     let is_timeout = self.is_timeout.load(Ordering::SeqCst);

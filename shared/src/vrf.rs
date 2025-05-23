@@ -12,8 +12,8 @@ pub fn vrf_prove(
     s: u32,
     leader_id: u32,
 ) -> (HashSet<u32>, Vec<u8>) {
-    let mut possible_ids: Vec<u32> = (0..s).collect(); // Generate IDs dynamically
-    possible_ids.retain(|&id| id != leader_id); // Remove leader_id from shuffling list
+    let mut possible_ids: Vec<u32> = (0..s).collect();
+    possible_ids.retain(|&id| id != leader_id);
 
     let seed_bytes = seed.as_bytes();
     let proof = private_key.sign(seed_bytes);
