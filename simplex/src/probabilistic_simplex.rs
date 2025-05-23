@@ -405,7 +405,7 @@ impl ProbabilisticSimplex {
                                     Ok(json) => json,
                                     Err(e) => {
                                         error!("Failed to serialize message: {}", e);
-                                        break;
+                                        return;
                                     }
                                 };
                                 let bytes = serialized_message.as_bytes();
@@ -413,11 +413,11 @@ impl ProbabilisticSimplex {
                                     Ok(_) => { }
                                     Err(_) => {
                                         warn!("Propose Signature verification failed");
-                                        break;
+                                        return;
                                     }
                                 }
                             }
-                            None => break,
+                            None => return,
                         }
                     }
                     let is_timeout = self.is_timeout.load(Ordering::SeqCst);
