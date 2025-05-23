@@ -14,7 +14,7 @@ use crate::probabilistic_simplex::ProbabilisticSimplex;
 use crate::protocol::{Protocol, ProtocolMode};
 
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let enable_logging = false;
     let args: Vec<String> = env::args().collect();
