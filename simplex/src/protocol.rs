@@ -103,9 +103,7 @@ pub trait Protocol {
             info!("----------------------");
             info!("----------------------");
             info!("Leader is node {} | Iteration: {}", leader, iteration);
-            if !self.get_environment().test_flag {
-                self.get_blockchain().print();
-            }
+            self.get_blockchain().print();
 
             let my_node_id = self.get_environment().my_node.id;
             if leader == my_node_id {

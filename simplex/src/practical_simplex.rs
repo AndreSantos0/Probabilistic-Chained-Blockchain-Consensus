@@ -360,7 +360,7 @@ impl PracticalSimplex {
     async fn handle_propose(&mut self, propose: Propose, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>, reset_timer_sender: &Sender<()>) {
         info!("Received propose {}", propose.content.length);
         let leader = Self::get_leader(self.environment.nodes.len(), propose.content.iteration);
-        if !self.proposes.contains_key(&propose.content.iteration) && (sender == leader || self.environment.test_flag) {
+        if !self.proposes.contains_key(&propose.content.iteration) && sender == leader {
             self.proposes.insert(propose.content.iteration, propose.clone());
             let iteration = self.iteration.load(Ordering::SeqCst);
             if iteration == propose.content.iteration && !self.is_timeout.load(Ordering::SeqCst) && self.blockchain.is_extendable(&propose.content) {
@@ -404,7 +404,7 @@ impl PracticalSimplex {
         info!("Received vote {}", vote.iteration);
         let vote_signatures = self.votes.entry(vote.header).or_insert_with(Vec::new);
         let is_first_vote = !vote_signatures.iter().any(|vote_signature| vote_signature.node == sender);
-        if is_first_vote || self.environment.test_flag {
+        if is_first_vote {
             vote_signatures.push(VoteSignature { signature: vote.signature, node: sender });
             info!("{} signatures", vote_signatures.len());
             let iteration = self.iteration.load(Ordering::SeqCst);
@@ -446,7 +446,7 @@ impl PracticalSimplex {
         info!("Received timeout {}", timeout.next_iter);
         let timeouts = self.timeouts.entry(timeout.next_iter).or_insert_with(Vec::new);
         let is_first_timeout = !timeouts.iter().any(|node_id| *node_id == sender);
-        if is_first_timeout || self.environment.test_flag {
+        if is_first_timeout {
             timeouts.push(sender);
             info!("{} matching timeouts for iter {}", timeouts.len(), timeout.next_iter);
             if timeouts.len() == self.quorum_size && timeout.next_iter == self.iteration.load(Ordering::SeqCst) + 1 {
@@ -461,20 +461,16 @@ impl PracticalSimplex {
         info!("Received finalize {}", finalize.iter);
         let finalizes = self.finalizes.entry(finalize.iter).or_insert_with(Vec::new);
         let is_first_finalize = !finalizes.iter().any(|node_id| *node_id == sender);
-        if is_first_finalize || self.environment.test_flag {
+        if is_first_finalize {
             finalizes.push(sender);
             if finalizes.len() == self.quorum_size {
                 if let Some(_) = self.blockchain.get_block(finalize.iter) {
-                    if !self.environment.test_flag {
-                        self.blockchain.finalize(finalize.iter).await;
-                    }
+                    self.blockchain.finalize(finalize.iter).await;
                     self.proposes.retain(|iteration, _| *iteration > finalize.iter);
                     self.votes.retain(|_, signatures| signatures.len() < self.environment.nodes.len() * 2 / 3 + 1);
                     self.finalizes.retain(|iteration, _| *iteration > finalize.iter);
                 } else {
-                    if !self.environment.test_flag {
-                        self.blockchain.add_to_be_finalized(finalize.iter);
-                    }
+                    self.blockchain.add_to_be_finalized(finalize.iter);
                     self.request(sender, dispatcher_queue_sender).await;
                 }
             }
