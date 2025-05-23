@@ -23,7 +23,7 @@ pub trait Protocol {
 
     const INITIAL_ITERATION: u32 = 1;
     const ITERATION_TIME: u64 = 5;
-    const MESSAGE_CHANNEL_SIZE: usize = 100;
+    const MESSAGE_CHANNEL_SIZE: usize = 1000;
     const RESET_TIMER_CHANNEL_SIZE: usize = 100;
     const SOCKET_BINDING_DELAY: u64 = 5;
     const TRANSACTION_SIZE: usize = 32;
