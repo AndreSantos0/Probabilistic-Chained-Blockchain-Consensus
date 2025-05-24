@@ -223,7 +223,7 @@ impl ProbabilisticSimplex {
                         sample: sample.clone().into_iter().collect(),
                         proof,
                     });
-                    broadcast_to_sample(private_key, connections, vote, sample.into_iter().collect(), enable_crypto).await;
+                    broadcast(private_key, connections, vote, enable_crypto).await;
                 } else {
                     let mut possible_ids: Vec<u32> = (0..n_nodes as u32).collect();
                     possible_ids.retain(|&id| id != next_leader);
@@ -241,7 +241,7 @@ impl ProbabilisticSimplex {
                         sample: sample.clone().into_iter().collect(),
                         proof: Vec::new(),
                     });
-                    broadcast_to_sample(private_key, connections, vote, sample.into_iter().collect(), enable_crypto).await;
+                    broadcast(private_key, connections, vote, enable_crypto).await;
                 }
             }
             Dispatch::Timeout(next_iter) => {
@@ -253,7 +253,7 @@ impl ProbabilisticSimplex {
                 if enable_crypto {
                     let (sample, proof) = vrf_prove(private_key, &format!("{}finalize", iter), sample_size, n_nodes as u32, next_leader);
                     let finalize = ProbabilisticSimplexMessage::Finalize(ProbFinalize { iter, sample: sample.clone().into_iter().collect(), proof });
-                    broadcast_to_sample(private_key, connections, finalize, sample.into_iter().collect(), enable_crypto).await;
+                    broadcast(private_key, connections, finalize, enable_crypto).await;
                 } else {
                     let mut possible_ids: Vec<u32> = (0..n_nodes as u32).collect();
                     possible_ids.retain(|&id| id != next_leader);
@@ -264,7 +264,7 @@ impl ProbabilisticSimplex {
                     let mut sample: HashSet<u32> = possible_ids.into_iter().take(sample_size - 1).collect();
                     sample.insert(next_leader);
                     let finalize = ProbabilisticSimplexMessage::Finalize(ProbFinalize { iter, sample: sample.clone().into_iter().collect(), proof: Vec::new() });
-                    broadcast_to_sample(private_key, connections, finalize, sample.into_iter().collect(), enable_crypto).await;
+                    broadcast(private_key, connections, finalize, enable_crypto).await;
                 }
             }
             Dispatch::Request(last_notarized_length, sender) => {
