@@ -288,10 +288,11 @@ impl PracticalSimplex {
 
                 match &message {
                     PracticalSimplexMessage::View(view) => {
+                       /*
                         if view.last_notarized_block_cert.iter().len() >= quorum_size {
                             for vote_signature in view.last_notarized_block_cert.iter() {
                                 match public_keys.get(&vote_signature.node) {
-                                    None => return,
+                                    None => continue,
                                     Some(key) => {
                                         let public_key = UnparsedPublicKey::new(&ED25519, key);
                                         let serialized_message = match to_string(&view.last_notarized_block_header) {
@@ -313,6 +314,7 @@ impl PracticalSimplex {
                                 }
                             }
                         }
+                        */
                     }
                     PracticalSimplexMessage::Reply(reply) => {
                         if reply.blocks.is_empty() {
@@ -326,6 +328,7 @@ impl PracticalSimplex {
                             if hashed_transactions != notarized.block.transactions {
                                 continue;
                             }
+                            /*
                             if notarized.signatures.len() >= quorum_size {
                                 for vote_signature in notarized.signatures.iter() {
                                     match public_keys.get(&vote_signature.node) {
@@ -348,6 +351,7 @@ impl PracticalSimplex {
                                     }
                                 }
                             }
+                             */
                         }
                     }
                     _ => {}
