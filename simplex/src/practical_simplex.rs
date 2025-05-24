@@ -196,39 +196,43 @@ impl PracticalSimplex {
         match content {
             Dispatch::Propose(block) => {
                 let propose = PracticalSimplexMessage::Propose(Propose { content: block });
-                broadcast(private_key, connections, propose, enable_crypto).await;
+                broadcast(private_key, connections, propose, !enable_crypto).await;
             }
             Dispatch::Vote(iteration, header) => {
-                let signature =
-                    Vec::new();
-
+                let signature = if !enable_crypto {
+                    Vec::new()
+                } else {
+                    let serialized_message = to_string(&header).unwrap();
+                    let serialized_bytes = serialized_message.as_bytes();
+                    Vec::from(private_key.sign(serialized_bytes).as_ref())
+                };
 
                 let vote = PracticalSimplexMessage::Vote(Vote {
                     iteration,
                     header,
                     signature
                 });
-                broadcast(private_key, connections, vote, enable_crypto).await;
+                broadcast(private_key, connections, vote, !enable_crypto).await;
             }
             Dispatch::Timeout(next_iter) => {
                 let timeout = PracticalSimplexMessage::Timeout(Timeout { next_iter });
-                broadcast(private_key, connections, timeout, enable_crypto).await;
+                broadcast(private_key, connections, timeout, !enable_crypto).await;
             }
             Dispatch::Finalize(iter) => {
                 let finalize = PracticalSimplexMessage::Finalize(Finalize { iter });
-                broadcast(private_key, connections, finalize, enable_crypto).await;
+                broadcast(private_key, connections, finalize, !enable_crypto).await;
             }
             Dispatch::View(header, cert) => {
                 let view = PracticalSimplexMessage::View(View { last_notarized_block_header: header, last_notarized_block_cert: cert });
-                notify(private_key, connections, view, my_node_id, enable_crypto).await;
+                notify(private_key, connections, view, my_node_id, !enable_crypto).await;
             }
             Dispatch::Request(last_notarized_length, sender) => {
                 let request = PracticalSimplexMessage::Request(Request { last_notarized_length });
-                unicast(private_key, connections, request, sender, enable_crypto).await;
+                unicast(private_key, connections, request, sender, !enable_crypto).await;
             }
             Dispatch::Reply(blocks, sender) => {
                 let reply = PracticalSimplexMessage::Reply(Reply { blocks });
-                unicast(private_key, connections, reply, sender, enable_crypto).await;
+                unicast(private_key, connections, reply, sender, !enable_crypto).await;
             }
             _ => {}
         }

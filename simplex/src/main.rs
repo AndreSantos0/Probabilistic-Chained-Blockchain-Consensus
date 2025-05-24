@@ -8,6 +8,7 @@ mod practical_simplex;
 
 use std::env;
 use env_logger::Env;
+use log::{error, info};
 use shared::initializer::{get_environment, get_private_key, get_public_keys};
 use crate::practical_simplex::PracticalSimplex;
 use crate::probabilistic_simplex::ProbabilisticSimplex;
@@ -30,7 +31,7 @@ async fn main() {
     };
     match get_environment(args) {
         Ok(env) => {
-            println!("Successfully read environment: {:?}", env);
+            info!("Successfully read environment: {:?}", env);
             let public_keys = get_public_keys();
             let private_key = get_private_key(env.my_node.id);
             match protocol_mode {
@@ -39,7 +40,7 @@ async fn main() {
             };
         },
         Err(err) => {
-            eprintln!("Error: {}", err);
+            error!("Error: {}", err);
         }
     }
 }
