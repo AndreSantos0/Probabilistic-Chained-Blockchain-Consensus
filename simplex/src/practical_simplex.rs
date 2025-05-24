@@ -199,13 +199,9 @@ impl PracticalSimplex {
                 broadcast(private_key, connections, propose, enable_crypto).await;
             }
             Dispatch::Vote(iteration, header) => {
-                let signature = if !enable_crypto {
-                    Vec::new()
-                } else {
-                    let serialized_message = to_string(&header).unwrap();
-                    let serialized_bytes = serialized_message.as_bytes();
-                    Vec::from(private_key.sign(serialized_bytes).as_ref())
-                };
+                let signature =
+                    Vec::new();
+
 
                 let vote = PracticalSimplexMessage::Vote(Vote {
                     iteration,
@@ -271,6 +267,7 @@ impl PracticalSimplex {
             };
 
             if enable_crypto {
+                /*
                 let mut signature = vec![0; SIGNATURE_BYTES_LENGTH];
                 let (payload, signature) = if message.is_vote() {
                     (message.get_vote_header_bytes().expect(&format!("[Node {}] Error reading message signature from Node {}", my_node_id, node_id)),
@@ -285,10 +282,10 @@ impl PracticalSimplex {
                 if !public_key.verify(&payload, signature).is_ok() {
                     continue;
                 }
+                 */
 
                 match &message {
                     PracticalSimplexMessage::View(view) => {
-                       /*
                         if view.last_notarized_block_cert.iter().len() >= quorum_size {
                             for vote_signature in view.last_notarized_block_cert.iter() {
                                 match public_keys.get(&vote_signature.node) {
@@ -314,7 +311,6 @@ impl PracticalSimplex {
                                 }
                             }
                         }
-                        */
                     }
                     PracticalSimplexMessage::Reply(reply) => {
                         if reply.blocks.is_empty() {
@@ -328,7 +324,6 @@ impl PracticalSimplex {
                             if hashed_transactions != notarized.block.transactions {
                                 continue;
                             }
-                            /*
                             if notarized.signatures.len() >= quorum_size {
                                 for vote_signature in notarized.signatures.iter() {
                                     match public_keys.get(&vote_signature.node) {
@@ -351,7 +346,6 @@ impl PracticalSimplex {
                                     }
                                 }
                             }
-                             */
                         }
                     }
                     _ => {}
