@@ -250,9 +250,22 @@ impl ProbabilisticSimplex {
             }
             Dispatch::Finalize(iter) => {
                 let next_leader = Self::get_leader(n_nodes, iter + 1);
-                let (sample, proof) = vrf_prove(private_key, &format!("{}finalize", iter), sample_size, n_nodes as u32, next_leader);
-                let finalize = ProbabilisticSimplexMessage::Finalize(ProbFinalize { iter, sample: sample.clone().into_iter().collect(), proof });
-                broadcast_to_sample(private_key, connections, finalize, sample.into_iter().collect(), enable_crypto).await;
+                if enable_crypto {
+                    let (sample, proof) = vrf_prove(private_key, &format!("{}finalize", iter), sample_size, n_nodes as u32, next_leader);
+                    let finalize = ProbabilisticSimplexMessage::Finalize(ProbFinalize { iter, sample: sample.clone().into_iter().collect(), proof });
+                    broadcast_to_sample(private_key, connections, finalize, sample.into_iter().collect(), enable_crypto).await;
+                } else {
+                    let mut possible_ids: Vec<u32> = (0..n_nodes as u32).collect();
+                    possible_ids.retain(|&id| id != next_leader);
+                    let mut seed = [0u8; 32];
+                    thread_rng().fill_bytes(&mut seed);
+                    let mut rng = StdRng::from_seed(seed);
+                    possible_ids.shuffle(&mut rng);
+                    let mut sample: HashSet<u32> = possible_ids.into_iter().take(sample_size - 1).collect();
+                    sample.insert(next_leader);
+                    let finalize = ProbabilisticSimplexMessage::Finalize(ProbFinalize { iter, sample: sample.clone().into_iter().collect(), proof: Vec::new() });
+                    broadcast_to_sample(private_key, connections, finalize, sample.into_iter().collect(), enable_crypto).await;
+                }
             }
             Dispatch::Request(last_notarized_length, sender) => {
                 let request = PracticalSimplexMessage::Request(Request { last_notarized_length });
