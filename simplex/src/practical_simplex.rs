@@ -26,7 +26,7 @@ pub struct PracticalSimplex {
     votes: HashMap<SimplexBlockHeader, Vec<VoteSignature>>,
     timeouts: HashMap<u32, Vec<u32>>,
     finalizes: HashMap<u32, Vec<u32>>,
-    blockchain: Arc<Blockchain>,
+    blockchain: Blockchain,
     transaction_generator: TransactionGenerator,
     public_keys: HashMap<u32, Vec<u8>>,
     private_key: Ed25519KeyPair,
@@ -48,7 +48,7 @@ impl Protocol for PracticalSimplex {
             votes: HashMap::new(),
             timeouts: HashMap::new(),
             finalizes: HashMap::new(),
-            blockchain: Arc::new(Blockchain::new(my_node_id)),
+            blockchain:Blockchain::new(my_node_id),
             transaction_generator: TransactionGenerator::new(Self::TRANSACTION_SIZE),
             public_keys,
             private_key
@@ -111,9 +111,8 @@ impl Protocol for PracticalSimplex {
                     let my_node_id = self.environment.my_node.id;
                     let public_keys = self.public_keys.clone();
                     let quorum_size = self.quorum_size;
-                    let blockchain = self.blockchain.clone();
                     tokio::spawn(async move {
-                        Self::handle_connection(enable_crypto, stream, sender, &public_keys, quorum_size, my_node_id, claimed_id, blockchain).await;
+                        Self::handle_connection(enable_crypto, stream, sender, &public_keys, quorum_size, my_node_id, claimed_id).await;
                     });
                 } else {
                     warn!("[Node {}] Invalid signature from claimed Node {}", self.environment.my_node.id, claimed_id);
@@ -246,7 +245,6 @@ impl PracticalSimplex {
         quorum_size: usize,
         my_node_id: NodeId,
         node_id: NodeId,
-        blockchain: Arc<Blockchain>
     ) {
         let public_key = UnparsedPublicKey::new(&ED25519, public_keys.get(&node_id).expect(&format!("[Node {}] Error getting public key of Node {}", my_node_id, node_id)));
         loop {
@@ -287,6 +285,7 @@ impl PracticalSimplex {
                     continue;
                 }
 
+                /*
                 match &message {
                     PracticalSimplexMessage::View(view) => {
                         if view.last_notarized_block_cert.iter().len() >= quorum_size {
@@ -355,6 +354,8 @@ impl PracticalSimplex {
                 }
                 _ => {}
             }
+
+                 */
         }
         let _ = message_queue_sender.send((node_id, message)).await;
         }
@@ -494,16 +495,13 @@ impl PracticalSimplex {
 
     async fn handle_request(&self, request: Request, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
         info!("Request received");
-        let blockchain = self.blockchain.clone();
-        let dispatcher_queue_sender = dispatcher_queue_sender.clone();
-        tokio::spawn(async move {
-            let missing = blockchain.get_missing(request.last_notarized_length).await;
-            if missing.is_empty() {
-                return
-            }
-            let reply = Dispatch::Reply(missing, sender);
-            let _ = dispatcher_queue_sender.send(reply).await;
-        });
+        let missing = self.blockchain.get_missing(request.last_notarized_length).await;
+        if missing.is_empty() {
+            return
+        }
+        let reply = Dispatch::Reply(missing, sender);
+        let _ = dispatcher_queue_sender.send(reply).await;
+
     }
 
     async fn handle_reply(
