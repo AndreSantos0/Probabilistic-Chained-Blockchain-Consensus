@@ -332,7 +332,7 @@ impl PracticalSimplex {
                                             let serialized_message = match serialize(&notarized.block) {
                                                 Ok(msg) => msg,
                                                 Err(_) => {
-                                                    error!("[Node {}] Failed to deserialize vote signature header", my_node_id);
+                                                    error!("[Node {}] Failed to serialize vote signature header", my_node_id);
                                                     continue;
                                                 }
                                             };
@@ -350,7 +350,7 @@ impl PracticalSimplex {
                     _ => {}
                 }
             }
-        let _ = message_queue_sender.send((node_id, message)).await;
+            let _ = message_queue_sender.send((node_id, message)).await;
         }
     }
 

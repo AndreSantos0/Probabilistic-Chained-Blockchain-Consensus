@@ -1,7 +1,7 @@
 use crate::block::{SimplexBlockHeader, SimplexBlock, VoteSignature, NodeId};
 use crate::blockchain::Blockchain;
 use crate::connection::{broadcast, broadcast_to_sample, generate_nonce, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
-use crate::message::{Dispatch, PracticalSimplexMessage, ProbFinalize, ProbPropose, ProbVote, ProbabilisticSimplexMessage, Reply, Request, SimplexMessage, Timeout};
+use crate::message::{Dispatch, ProbFinalize, ProbPropose, ProbVote, ProbabilisticSimplexMessage, Reply, Request, SimplexMessage, Timeout};
 use crate::protocol::Protocol;
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey, ED25519};
 use sha2::{Digest, Sha256};
@@ -267,11 +267,11 @@ impl ProbabilisticSimplex {
                 }
             }
             Dispatch::Request(last_notarized_length, sender) => {
-                let request = PracticalSimplexMessage::Request(Request { last_notarized_length });
+                let request = ProbabilisticSimplexMessage::Request(Request { last_notarized_length });
                 unicast(private_key, connections, request, sender, enable_crypto).await;
             }
             Dispatch::Reply(blocks, sender) => {
-                let reply = PracticalSimplexMessage::Reply(Reply { blocks });
+                let reply = ProbabilisticSimplexMessage::Reply(Reply { blocks });
                 unicast(private_key, connections, reply, sender, enable_crypto).await;
             }
             _ => {}
@@ -329,7 +329,6 @@ impl ProbabilisticSimplex {
                 }
 
                 match &message {
-                    //ProbabilisticSimplexMessage::Propose(_) => {} TODO: discuss this
                     ProbabilisticSimplexMessage::Vote(vote) => {
                         if !vote.sample.contains(&my_node_id) {
                             continue
@@ -368,7 +367,7 @@ impl ProbabilisticSimplex {
                                             let serialized_message = match serialize(&notarized.block) {
                                                 Ok(msg) => msg,
                                                 Err(_) => {
-                                                    error!("[Node {}] Failed to deserialize vote signature header", my_node_id);
+                                                    error!("[Node {}] Failed to serialize vote signature header", my_node_id);
                                                     continue;
                                                 }
                                             };
