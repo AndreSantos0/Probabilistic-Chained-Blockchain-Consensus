@@ -1,7 +1,7 @@
-use std::hash::Hash;
-use serde_json::to_string;
+use bincode::serialize;
 use sha2::{Digest, Sha256};
 use shared::domain::transaction::Transaction;
+use std::hash::Hash;
 
 
 pub type NodeId = u32;
@@ -44,9 +44,9 @@ pub struct SimplexBlockHeader {
 
 impl From<&SimplexBlock> for SimplexBlockHeader {
     fn from(block: &SimplexBlock) -> Self {
-        let transactions_data = to_string(&block.transactions).expect("Failed to serialize Block transactions");
+        let transactions_data = serialize(&block.transactions).expect("Failed to serialize Block transactions");
         let mut hasher = Sha256::new();
-        hasher.update(transactions_data.as_bytes());
+        hasher.update(&transactions_data);
         let hashed_transactions = hasher.finalize().to_vec();
         SimplexBlockHeader { hash: block.hash.clone(), iteration: block.iteration, length: block.length, transactions: hashed_transactions }
     }

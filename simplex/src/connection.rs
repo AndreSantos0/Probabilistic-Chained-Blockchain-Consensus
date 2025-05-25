@@ -1,8 +1,7 @@
-
+use bincode::{serialize};
 use crate::message::SimplexMessage;
 use ring::signature::{Ed25519KeyPair};
-use serde_json::{to_string};
-use log::{error};
+use log::{error, info};
 use rand::rngs::OsRng;
 use rand::TryRngCore;
 use tokio::io::{AsyncWriteExt};
@@ -25,19 +24,19 @@ pub async fn broadcast<M: SimplexMessage>(
     message: M,
     enable_crypto: bool,
 ) {
-    let serialized_bytes = match to_string(&message) {
-        Ok(json) => json.into_bytes(),
+    let payload = match serialize(&message) {
+        Ok(msg) => msg,
         Err(e) => {
             error!("Failed to serialize message: {}", e);
             return;
         }
     };
 
-    let length_bytes = (serialized_bytes.len() as u32).to_be_bytes();
+    let length_bytes = (payload.len() as u32).to_be_bytes();
     let signature = if message.is_vote() || !enable_crypto {
         None
     } else {
-        Some(private_key.sign(&serialized_bytes))
+        Some(private_key.sign(&payload))
     };
 
     let mut failed_indices = vec![];
@@ -46,7 +45,7 @@ pub async fn broadcast<M: SimplexMessage>(
         match stream {
             None => {}
             Some(stream) => {
-                if stream.write_all(&length_bytes).await.is_err() || stream.write_all(&serialized_bytes).await.is_err() || match &signature {
+                if stream.write_all(&length_bytes).await.is_err() || stream.write_all(&payload).await.is_err() || match &signature {
                     Some(sig) => stream.write_all(sig.as_ref()).await.is_err(),
                     None => false,
                 } {
@@ -69,19 +68,19 @@ pub async fn broadcast_to_sample<M: SimplexMessage>(
     sample_set: Vec<u32>,
     enable_crypto: bool,
 ) {
-    let serialized_bytes = match to_string(&message) {
-        Ok(json) => json.into_bytes(),
+    let payload = match serialize(&message) {
+        Ok(msg) => msg,
         Err(e) => {
             error!("Failed to serialize message: {}", e);
             return;
         }
     };
 
-    let length_bytes = (serialized_bytes.len() as u32).to_be_bytes();
+    let length_bytes = (payload.len() as u32).to_be_bytes();
     let signature = if message.is_vote() || !enable_crypto {
         None
     } else {
-        Some(private_key.sign(&serialized_bytes))
+        Some(private_key.sign(&payload))
     };
 
     let mut failed_indices = vec![];
@@ -91,7 +90,7 @@ pub async fn broadcast_to_sample<M: SimplexMessage>(
         match stream {
             None => {}
             Some(stream) => {
-                if stream.write_all(&length_bytes).await.is_err() || stream.write_all(&serialized_bytes).await.is_err() || match &signature {
+                if stream.write_all(&length_bytes).await.is_err() || stream.write_all(&payload).await.is_err() || match &signature {
                     Some(sig) => stream.write_all(sig.as_ref()).await.is_err(),
                     None => false,
                 } {
@@ -114,19 +113,19 @@ pub async fn notify<M: SimplexMessage>(
     my_node_id: u32,
     enable_crypto: bool,
 ) {
-    let serialized_bytes = match to_string(&message) {
-        Ok(json) => json.into_bytes(),
+    let payload = match serialize(&message) {
+        Ok(msg) => msg,
         Err(e) => {
             error!("Failed to serialize message: {}", e);
             return;
         }
     };
 
-    let length_bytes = (serialized_bytes.len() as u32).to_be_bytes();
+    let length_bytes = (payload.len() as u32).to_be_bytes();
     let signature = if message.is_vote() || !enable_crypto {
         None
     } else {
-        Some(private_key.sign(&serialized_bytes))
+        Some(private_key.sign(&payload))
     };
 
     let mut failed_indices = vec![];
@@ -138,7 +137,7 @@ pub async fn notify<M: SimplexMessage>(
         match stream {
             None => {}
             Some(stream) => {
-                if stream.write_all(&length_bytes).await.is_err() || stream.write_all(&serialized_bytes).await.is_err() || match &signature {
+                if stream.write_all(&length_bytes).await.is_err() || stream.write_all(&payload).await.is_err() || match &signature {
                     Some(sig) => stream.write_all(sig.as_ref()).await.is_err(),
                     None => false,
                 } {
@@ -161,26 +160,26 @@ pub async fn unicast<M: SimplexMessage>(
     recipient: u32,
     enable_crypto: bool,
 ) {
-    let serialized_bytes = match to_string(&message) {
-        Ok(json) => json.into_bytes(),
+    let payload = match serialize(&message) {
+        Ok(msg) => msg,
         Err(e) => {
             error!("Failed to serialize message: {}", e);
             return;
         }
     };
 
-    let length_bytes = (serialized_bytes.len() as u32).to_be_bytes();
+    let length_bytes = (payload.len() as u32).to_be_bytes();
     let signature = if message.is_vote() || !enable_crypto {
         None
     } else {
-        Some(private_key.sign(&serialized_bytes))
+        Some(private_key.sign(&payload))
     };
 
     let stream = &mut connections[recipient as usize];
     match stream {
         None => {}
         Some(connection) => {
-            if connection.write_all(&length_bytes).await.is_err() || connection.write_all(&serialized_bytes).await.is_err() || match &signature {
+            if connection.write_all(&length_bytes).await.is_err() || connection.write_all(&payload).await.is_err() || match &signature {
                 Some(sig) => connection.write_all(sig.as_ref()).await.is_err(),
                 None => false,
             } {

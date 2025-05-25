@@ -4,7 +4,6 @@ use crate::connection::{broadcast, broadcast_to_sample, generate_nonce, unicast,
 use crate::message::{Dispatch, PracticalSimplexMessage, ProbFinalize, ProbPropose, ProbVote, ProbabilisticSimplexMessage, Reply, Request, SimplexMessage, Timeout};
 use crate::protocol::Protocol;
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey, ED25519};
-use serde_json::{from_slice, to_string};
 use sha2::{Digest, Sha256};
 use shared::domain::environment::Environment;
 use shared::transaction_generator::TransactionGenerator;
@@ -12,6 +11,7 @@ use shared::vrf::{vrf_prove, vrf_verify};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use bincode::{deserialize, serialize};
 use log::{error, info, warn};
 use rand::{thread_rng, RngCore, SeedableRng};
 use rand::rngs::StdRng;
@@ -213,17 +213,16 @@ impl ProbabilisticSimplex {
                 let next_leader = Self::get_leader(n_nodes, iteration + 1);
                 if enable_crypto {
                     let (sample, proof) = vrf_prove(private_key, &format!("{}vote", iteration), sample_size, n_nodes as u32, next_leader);
-                    let serialized_message = to_string(&header).unwrap();
-                    let serialized_bytes = serialized_message.as_bytes();
-                    let signature = Vec::from(private_key.sign(serialized_bytes).as_ref());
+                    let serialized_message = serialize(&header).unwrap();
+                    let signature = private_key.sign(&serialized_message);
                     let vote = ProbabilisticSimplexMessage::Vote(ProbVote {
                         iteration,
                         header,
-                        signature,
+                        signature: signature.as_ref().to_vec(),
                         sample: sample.clone().into_iter().collect(),
                         proof,
                     });
-                    broadcast(private_key, connections, vote, enable_crypto).await;
+                    broadcast_to_sample(private_key, connections, vote, sample.into_iter().collect(), enable_crypto).await;
                 } else {
                     let mut possible_ids: Vec<u32> = (0..n_nodes as u32).collect();
                     possible_ids.retain(|&id| id != next_leader);
@@ -241,7 +240,7 @@ impl ProbabilisticSimplex {
                         sample: sample.clone().into_iter().collect(),
                         proof: Vec::new(),
                     });
-                    broadcast(private_key, connections, vote, enable_crypto).await;
+                    broadcast_to_sample(private_key, connections, vote, sample.into_iter().collect(), enable_crypto).await;
                 }
             }
             Dispatch::Timeout(next_iter) => {
@@ -253,7 +252,7 @@ impl ProbabilisticSimplex {
                 if enable_crypto {
                     let (sample, proof) = vrf_prove(private_key, &format!("{}finalize", iter), sample_size, n_nodes as u32, next_leader);
                     let finalize = ProbabilisticSimplexMessage::Finalize(ProbFinalize { iter, sample: sample.clone().into_iter().collect(), proof });
-                    broadcast(private_key, connections, finalize, enable_crypto).await;
+                    broadcast_to_sample(private_key, connections, finalize, sample.into_iter().collect(), enable_crypto).await;
                 } else {
                     let mut possible_ids: Vec<u32> = (0..n_nodes as u32).collect();
                     possible_ids.retain(|&id| id != next_leader);
@@ -264,7 +263,7 @@ impl ProbabilisticSimplex {
                     let mut sample: HashSet<u32> = possible_ids.into_iter().take(sample_size - 1).collect();
                     sample.insert(next_leader);
                     let finalize = ProbabilisticSimplexMessage::Finalize(ProbFinalize { iter, sample: sample.clone().into_iter().collect(), proof: Vec::new() });
-                    broadcast(private_key, connections, finalize, enable_crypto).await;
+                    broadcast_to_sample(private_key, connections, finalize, sample.into_iter().collect(), enable_crypto).await;
                 }
             }
             Dispatch::Request(last_notarized_length, sender) => {
@@ -305,7 +304,7 @@ impl ProbabilisticSimplex {
                 return;
             }
 
-            let message: ProbabilisticSimplexMessage = match from_slice(&buffer) {
+            let message: ProbabilisticSimplexMessage = match deserialize(&buffer) {
                 Ok(msg) => msg,
                 Err(_) => {
                     error!("[Node {}] Error deserializing message from Node {}", my_node_id, node_id);
@@ -354,9 +353,9 @@ impl ProbabilisticSimplex {
                             continue
                         }
                         for notarized in reply.blocks.iter() {
-                            let transactions_data = to_string(&notarized.transactions).expect(&format!("[Node {}] Failed to serialize block transactions during reply", my_node_id));
+                            let transactions_data = serialize(&notarized.transactions).expect(&format!("[Node {}] Failed to serialize block transactions during reply", my_node_id));
                             let mut hasher = Sha256::new();
-                            hasher.update(transactions_data.as_bytes());
+                            hasher.update(&transactions_data);
                             let hashed_transactions = hasher.finalize().to_vec();
                             if hashed_transactions != notarized.block.transactions {
                                 continue;
@@ -366,15 +365,14 @@ impl ProbabilisticSimplex {
                                     match public_keys.get(&vote_signature.node) {
                                         Some(key) => {
                                             let pub_key = UnparsedPublicKey::new(&ED25519, key);
-                                            let serialized_message = match to_string(&notarized.block) {
-                                                Ok(json) => json,
+                                            let serialized_message = match serialize(&notarized.block) {
+                                                Ok(msg) => msg,
                                                 Err(_) => {
                                                     error!("[Node {}] Failed to deserialize vote signature header", my_node_id);
                                                     continue;
                                                 }
                                             };
-                                            let bytes = serialized_message.as_bytes();
-                                            if pub_key.verify(bytes, vote_signature.signature.as_ref()).is_err() {
+                                            if pub_key.verify(&serialized_message, vote_signature.signature.as_ref()).is_err() {
                                                 warn!("[Node {}] Failed to verify vote signature header during reply", my_node_id);
                                                 continue;
                                             }
@@ -433,15 +431,14 @@ impl ProbabilisticSimplex {
                             match self.public_keys.get(&vote_signature.node) {
                                 Some(key) => {
                                     let public_key = UnparsedPublicKey::new(&ED25519, key);
-                                    let serialized_message = match to_string(&header) {
-                                        Ok(json) => json,
+                                    let serialized_message = match serialize(&header) {
+                                        Ok(msg) => msg,
                                         Err(e) => {
                                             error!("Failed to serialize message: {}", e);
                                             return;
                                         }
                                     };
-                                    let bytes = serialized_message.as_bytes();
-                                    match public_key.verify(bytes, vote_signature.signature.as_ref()) {
+                                    match public_key.verify(&serialized_message, vote_signature.signature.as_ref()) {
                                         Ok(_) => { }
                                         Err(_) => {
                                             warn!("Propose Signature verification failed");

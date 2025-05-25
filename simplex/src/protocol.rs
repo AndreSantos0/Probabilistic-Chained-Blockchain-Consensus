@@ -107,7 +107,7 @@ pub trait Protocol {
 
             let my_node_id = self.get_environment().my_node.id;
             if leader == my_node_id {
-                let transactions = self.get_transaction_generator().generate(my_node_id);
+                let transactions = self.get_transaction_generator().generate();
                 let block = self.get_blockchain().get_next_block(iteration, transactions);
                 info!("Proposed {}", block.length);
                 let propose = self.create_proposal(block);

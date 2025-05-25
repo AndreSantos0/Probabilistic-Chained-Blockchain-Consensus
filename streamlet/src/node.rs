@@ -153,7 +153,7 @@ impl StreamletNode {
 
     async fn propose(&mut self, connections: &mut Vec<TcpStream>) {
         let epoch = self.epoch.load(Ordering::SeqCst);
-        let transactions = self.transaction_generator.generate(self.environment.my_node.id);
+        let transactions = self.transaction_generator.generate();
         let block = self.blockchain.get_next_block(epoch, transactions);
         let message = StreamletMessage::Propose(Propose { content: block });
         broadcast(&self.private_key, connections, message).await;

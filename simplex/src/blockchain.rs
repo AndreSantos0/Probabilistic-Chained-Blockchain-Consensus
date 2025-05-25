@@ -1,3 +1,4 @@
+use bincode::serialize;
 use log::info;
 use crate::block::{SimplexBlockHeader, NotarizedBlock, SimplexBlock, VoteSignature};
 use serde_json::to_string;
@@ -40,9 +41,9 @@ impl Blockchain {
     }
 
     pub fn hash(block: &NotarizedBlock) -> Vec<u8> {
-        let block_data = to_string(&block.block).expect("Failed to serialize Block");
+        let block_data = serialize(&block.block).expect("Failed to serialize Block");
         let mut hasher = Sha256::new();
-        hasher.update(block_data.as_bytes());
+        hasher.update(&block_data);
         hasher.finalize().to_vec()
     }
 

@@ -4,13 +4,13 @@ use crate::connection::{broadcast, generate_nonce, notify, unicast, MESSAGE_BYTE
 use crate::message::{Dispatch, Finalize, PracticalSimplexMessage, Propose, Reply, Request, SimplexMessage, Timeout, View, Vote};
 use crate::protocol::Protocol;
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey, ED25519};
-use serde_json::{from_slice, to_string};
 use sha2::{Digest, Sha256};
 use shared::domain::environment::Environment;
 use shared::transaction_generator::TransactionGenerator;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use bincode::{deserialize, serialize};
 use log::{error, info, warn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -199,12 +199,11 @@ impl PracticalSimplex {
                 broadcast(private_key, connections, propose, enable_crypto).await;
             }
             Dispatch::Vote(iteration, header) => {
-                let signature = if enable_crypto {
+                let signature = if !enable_crypto {
                     Vec::new()
                 } else {
-                    let serialized_message = to_string(&header).unwrap();
-                    let serialized_bytes = serialized_message.as_bytes();
-                    Vec::from(private_key.sign(serialized_bytes).as_ref())
+                    let serialized_message = serialize(&header).expect("Failed to serialize block header during vote");
+                    private_key.sign(&serialized_message).as_ref().to_vec()
                 };
 
                 let vote = PracticalSimplexMessage::Vote(Vote {
@@ -262,7 +261,7 @@ impl PracticalSimplex {
                 return;
             }
 
-            let message: PracticalSimplexMessage = match from_slice(&buffer) {
+            let message: PracticalSimplexMessage = match deserialize(&buffer) {
                 Ok(msg) => msg,
                 Err(_) => {
                     error!("[Node {}] Error deserializing message from Node {}", my_node_id, node_id);
@@ -270,8 +269,7 @@ impl PracticalSimplex {
                 }
             };
 
-            if enable_crypto && !message.is_vote() {
-
+            if enable_crypto {
                 let mut signature = vec![0; SIGNATURE_BYTES_LENGTH];
                 let (payload, signature) = if message.is_vote() {
                     (message.get_vote_header_bytes().expect(&format!("[Node {}] Error reading message signature from Node {}", my_node_id, node_id)),
@@ -295,15 +293,14 @@ impl PracticalSimplex {
                                     None => continue,
                                     Some(key) => {
                                         let public_key = UnparsedPublicKey::new(&ED25519, key);
-                                        let serialized_message = match to_string(&view.last_notarized_block_header) {
-                                            Ok(json) => json,
+                                        let serialized_message = match serialize(&view.last_notarized_block_header) {
+                                            Ok(msg) => msg,
                                             Err(_) => {
                                                 error!("[Node {}] Failed to deserialize vote signature header", my_node_id);
                                                 continue;
                                             }
                                         };
-                                        let bytes = serialized_message.as_bytes();
-                                        match public_key.verify(bytes, vote_signature.signature.as_ref()) {
+                                        match public_key.verify(&serialized_message, vote_signature.signature.as_ref()) {
                                             Ok(_) => { }
                                             Err(_) => {
                                                 warn!("[Node {}] Failed to verify vote signature header during view", my_node_id);
@@ -320,9 +317,9 @@ impl PracticalSimplex {
                             continue
                         }
                         for notarized in reply.blocks.iter() {
-                            let transactions_data = to_string(&notarized.transactions).expect(&format!("[Node {}] Failed to serialize block transactions during reply", my_node_id));
+                            let transactions_data = serialize(&notarized.transactions).expect(&format!("[Node {}] Failed to serialize block transactions during reply", my_node_id));
                             let mut hasher = Sha256::new();
-                            hasher.update(transactions_data.as_bytes());
+                            hasher.update(&transactions_data);
                             let hashed_transactions = hasher.finalize().to_vec();
                             if hashed_transactions != notarized.block.transactions {
                                 continue;
@@ -332,15 +329,14 @@ impl PracticalSimplex {
                                     match public_keys.get(&vote_signature.node) {
                                         Some(key) => {
                                             let pub_key = UnparsedPublicKey::new(&ED25519, key);
-                                            let serialized_message = match to_string(&notarized.block) {
-                                                Ok(json) => json,
+                                            let serialized_message = match serialize(&notarized.block) {
+                                                Ok(msg) => msg,
                                                 Err(_) => {
                                                     error!("[Node {}] Failed to deserialize vote signature header", my_node_id);
                                                     continue;
                                                 }
                                             };
-                                            let bytes = serialized_message.as_bytes();
-                                            if pub_key.verify(bytes, vote_signature.signature.as_ref()).is_err() {
+                                            if pub_key.verify(&serialized_message, vote_signature.signature.as_ref()).is_err() {
                                                 warn!("[Node {}] Failed to verify vote signature header during reply", my_node_id);
                                                 continue;
                                             }

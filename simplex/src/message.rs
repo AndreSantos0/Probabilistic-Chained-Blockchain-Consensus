@@ -1,4 +1,4 @@
-use serde_json::to_string;
+use bincode::serialize;
 use crate::block::{SimplexBlockHeader, NotarizedBlock, SimplexBlock, VoteSignature, Iteration, NodeId};
 
 pub trait SimplexMessage: Clone + Send + Sync + serde::Serialize + for<'de> serde::Deserialize<'de> {
@@ -69,7 +69,6 @@ pub struct Reply {
 }
 
 #[derive(Clone, serde::Serialize,serde::Deserialize, Debug)]
-#[serde(tag = "type", content = "data")]
 pub enum PracticalSimplexMessage {
     Propose(Propose),
     Vote(Vote),
@@ -81,7 +80,6 @@ pub enum PracticalSimplexMessage {
 }
 
 #[derive(Clone, serde::Serialize,serde::Deserialize, Debug)]
-#[serde(tag = "type", content = "data")]
 pub enum ProbabilisticSimplexMessage {
     Propose(ProbPropose),
     Vote(ProbVote),
@@ -105,7 +103,7 @@ impl SimplexMessage for PracticalSimplexMessage {
 
     fn get_vote_header_bytes(&self) -> Option<Vec<u8>> {
         match self {
-            Self::Vote(v) => to_string(&v.header).ok().map(|s| s.into_bytes()),
+            Self::Vote(v) => serialize(&v.header).ok(),
             _ => None,
         }
     }
@@ -126,7 +124,7 @@ impl SimplexMessage for ProbabilisticSimplexMessage {
 
     fn get_vote_header_bytes(&self) -> Option<Vec<u8>> {
         match self {
-            Self::Vote(v) => to_string(&v.header).ok().map(|s| s.into_bytes()),
+            Self::Vote(v) => serialize(&v.header).ok(),
             _ => None,
         }
     }
