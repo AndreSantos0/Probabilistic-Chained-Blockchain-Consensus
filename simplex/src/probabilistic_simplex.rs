@@ -555,12 +555,7 @@ impl ProbabilisticSimplex {
 
     async fn handle_request(&self, request: Request, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
         info!("Request received");
-        let missing = self.blockchain.get_missing(request.last_notarized_length).await;
-        if missing.is_empty() {
-            return
-        }
-        let reply = Dispatch::Reply(missing, sender);
-        let _ = dispatcher_queue_sender.send(reply).await;
+        self.blockchain.get_missing(request.last_notarized_length, sender, dispatcher_queue_sender).await;
     }
 
     async fn handle_reply(

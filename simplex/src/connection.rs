@@ -1,7 +1,7 @@
 use bincode::{serialize};
 use crate::message::SimplexMessage;
 use ring::signature::{Ed25519KeyPair};
-use log::{error, info};
+use log::{error};
 use rand::rngs::OsRng;
 use rand::TryRngCore;
 use tokio::io::{AsyncWriteExt};

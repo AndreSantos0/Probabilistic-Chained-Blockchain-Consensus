@@ -6,6 +6,8 @@ use sha2::{Digest, Sha256};
 use shared::domain::transaction::Transaction;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::mpsc::Sender;
+use crate::message::Dispatch;
 
 const GENESIS_ITERATION: u32 = 0;
 const GENESIS_LENGTH: u32 = 0;
@@ -96,25 +98,33 @@ impl Blockchain {
         last.block.length < length || (last.block.length == length && iteration != last.block.iteration)
     }
 
-    pub async fn get_missing(&self, from_length: u32) -> Vec<NotarizedBlock> {
-        let mut missing = Vec::new();
-        let last = self.last_notarized();
-        for curr_length in from_length ..= last.block.length {
-            let mut blocks: Vec<NotarizedBlock> = self.notarized.iter().filter(|notarized| notarized.block.length == curr_length).cloned().collect();
-            if blocks.is_empty() && curr_length != GENESIS_LENGTH {
-                match self.get_finalized_block(curr_length).await {
-                    Some(notarized) => {
-                        missing.push(notarized);
+    pub async fn get_missing(&self, from_length: u32, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
+        let dispatcher_queue_sender = dispatcher_queue_sender.clone();
+        let last = self.last_notarized().clone();
+        let notarized = self.notarized.clone();
+        let node_id = self.my_node_id;
+        tokio::spawn(async move {
+            let mut missing = Vec::new();
+            for curr_length in from_length ..= last.block.length {
+                let mut blocks: Vec<NotarizedBlock> = notarized.iter().filter(|notarized| notarized.block.length == curr_length).cloned().collect();
+                if blocks.is_empty() && curr_length != GENESIS_LENGTH {
+                    match get_finalized_block(node_id, curr_length).await {
+                        Some(notarized) => {
+                            missing.push(notarized);
+                        }
+                        None => {
+                            break
+                        }
                     }
-                    None => {
-                        break
-                    }
+                } else {
+                    missing.append(&mut blocks);
                 }
-            } else {
-                missing.append(&mut blocks);
             }
-        }
-        missing
+
+            if missing.is_empty() { return }
+            let reply = Dispatch::Reply(missing, sender);
+            let _ = dispatcher_queue_sender.send(reply).await;
+        });
     }
 
     pub fn add_to_be_finalized(&mut self, iteration: u32) {
@@ -156,24 +166,23 @@ impl Blockchain {
         self.notarized.retain(|notarized| notarized.block.iteration >= iteration);
     }
 
-
-    async fn get_finalized_block(&self, length: u32) -> Option<NotarizedBlock> {
-        let file = File::open(format!("{}{}.ndjson", FINALIZED_BLOCKS_FILENAME, self.my_node_id)).await.expect("Could not find Blockchain file");
-        let reader = BufReader::new(file);
-        let mut lines = reader.lines();
-        let mut current_index = 0;
-        while let Some(line) = lines.next_line().await.unwrap_or(None) {
-            if current_index == (length - 1) {
-                return serde_json::from_str(&line).ok();
-            }
-            current_index += 1;
-        }
-        None
-    }
-
     pub fn print(&self) {
         for notarized in self.notarized.iter() {
             info!("[Iteration: {} | Length: {}]", notarized.block.iteration, notarized.block.length);
         }
     }
+}
+
+async fn get_finalized_block(node_id: u32, length: u32) -> Option<NotarizedBlock> {
+    let file = File::open(format!("{}{}.ndjson", FINALIZED_BLOCKS_FILENAME, node_id)).await.expect("Could not find Blockchain file");
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut current_index = 0;
+    while let Some(line) = lines.next_line().await.unwrap_or(None) {
+        if current_index == (length - 1) {
+            return serde_json::from_str(&line).ok();
+        }
+        current_index += 1;
+    }
+    None
 }
