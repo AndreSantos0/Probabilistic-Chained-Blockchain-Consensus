@@ -16,7 +16,7 @@ const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks_";
 pub struct Blockchain {
     notarized: Vec<NotarizedBlock>,
     my_node_id: u32,
-    to_be_finalized: Vec<u32>, // vec iteration of blocks to be finalized
+    to_be_finalized: Vec<u32>,
     to_be_notarized: Vec<NotarizedBlock>,
     finalized_height: u32,
 }
