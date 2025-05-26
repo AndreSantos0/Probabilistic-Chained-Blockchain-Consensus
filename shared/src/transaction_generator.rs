@@ -2,7 +2,7 @@ use bincode::serialize;
 use crate::domain::transaction::{Transaction};
 
 
-const NUMBER_OF_TRANSACTIONS: usize = 10;
+const NUMBER_OF_TRANSACTIONS: usize = 1000;
 
 pub struct TransactionGenerator {
     required_padding: usize,

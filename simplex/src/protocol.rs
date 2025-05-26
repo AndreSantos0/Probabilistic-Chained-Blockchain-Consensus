@@ -26,7 +26,7 @@ pub trait Protocol {
     const MESSAGE_CHANNEL_SIZE: usize = 1000;
     const RESET_TIMER_CHANNEL_SIZE: usize = 100;
     const SOCKET_BINDING_DELAY: u64 = 5;
-    const TRANSACTION_SIZE: usize = 32;
+    const TRANSACTION_SIZE: usize = 0;
 
     type Message: SimplexMessage;
 
