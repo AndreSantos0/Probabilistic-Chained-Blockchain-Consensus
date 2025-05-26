@@ -16,6 +16,7 @@ use log::{error, info, warn};
 use rand::{thread_rng, RngCore, SeedableRng};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
+use rayon::prelude::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -348,37 +349,43 @@ impl ProbabilisticSimplex {
                         }
                     }
                     ProbabilisticSimplexMessage::Reply(reply) => {
-                        if reply.blocks.is_empty() {
-                            continue
-                        }
-                        for notarized in reply.blocks.iter() {
-                            let transactions_data = serialize(&notarized.transactions).expect(&format!("[Node {}] Failed to serialize block transactions during reply", my_node_id));
-                            let mut hasher = Sha256::new();
-                            hasher.update(&transactions_data);
-                            let hashed_transactions = hasher.finalize().to_vec();
-                            if hashed_transactions != notarized.block.transactions {
-                                continue;
-                            }
+                        if reply.blocks.is_empty() { continue }
+                        for notarized in &reply.blocks {
+                            let transactions_data = match serialize(&notarized.transactions) {
+                                Ok(data) => data,
+                                Err(_) => {
+                                    error!("[Node {}] Failed to serialize block transactions during reply", my_node_id);
+                                    continue;
+                                }
+                            };
+                            let hashed_transactions = Sha256::digest(&transactions_data).to_vec();
+                            if hashed_transactions != notarized.block.transactions { continue }
                             if notarized.signatures.len() >= probabilistic_quorum_size {
-                                for vote_signature in notarized.signatures.iter() {
-                                    match public_keys.get(&vote_signature.node) {
-                                        Some(key) => {
+                                let all_verified = notarized.signatures
+                                    .par_iter()
+                                    .map(|vote_signature| {
+                                        if let Some(key) = public_keys.get(&vote_signature.node) {
                                             let pub_key = UnparsedPublicKey::new(&ED25519, key);
                                             let serialized_message = match serialize(&notarized.block) {
                                                 Ok(msg) => msg,
                                                 Err(_) => {
                                                     error!("[Node {}] Failed to serialize vote signature header", my_node_id);
-                                                    continue;
+                                                    return false;
                                                 }
                                             };
-                                            if pub_key.verify(&serialized_message, vote_signature.signature.as_ref()).is_err() {
-                                                warn!("[Node {}] Failed to verify vote signature header during reply", my_node_id);
-                                                continue;
+                                            match pub_key.verify(&serialized_message, vote_signature.signature.as_ref()) {
+                                                Ok(_) => true,
+                                                Err(_) => {
+                                                    warn!("[Node {}] Failed to verify vote signature header during reply", my_node_id);
+                                                    false
+                                                }
                                             }
+                                        } else {
+                                            false
                                         }
-                                        None => continue,
-                                    }
-                                }
+                                    })
+                                    .all(|verified| verified);
+                                if !all_verified { continue }
                             }
                         }
                     }
@@ -396,8 +403,10 @@ impl ProbabilisticSimplex {
             self.proposes.insert(propose.content.iteration, propose.content.clone());
             let iteration = self.iteration.load(Ordering::SeqCst);
             let is_extendable = self.blockchain.is_extendable(&propose.content);
-            if iteration == propose.content.iteration {
+
+            if propose.content.iteration == iteration {
                 if is_extendable && !self.is_timeout.load(Ordering::SeqCst) {
+                    info!("Voted");
                     let block = SimplexBlockHeader::from(&propose.content);
                     let vote = Self::create_vote(iteration, block);
                     let _ = dispatcher_queue_sender.send(vote).await;
@@ -407,11 +416,7 @@ impl ProbabilisticSimplex {
                 if let Some(vote_signatures) = votes {
                     if vote_signatures.len() >= self.probabilistic_quorum_size {
                         let is_timeout = self.is_timeout.load(Ordering::SeqCst);
-                        self.blockchain.notarize(
-                            header,
-                            propose.content.transactions,
-                            vote_signatures.to_vec()
-                        ).await;
+                        self.blockchain.notarize(header, propose.content.transactions, vote_signatures.to_vec()).await;
                         self.iteration.fetch_add(1, Ordering::SeqCst);
                         if !is_timeout {
                             let finalize = Self::create_finalize(iteration);
@@ -421,49 +426,56 @@ impl ProbabilisticSimplex {
                         let _ = reset_timer_sender.send(()).await;
                     }
                 }
-            } else {
-                if self.proposes.contains_key(&propose.last_notarized_iter) && propose.last_notarized_cert.len() >= self.quorum_size && iteration == propose.last_notarized_iter {
+            }
+
+            if propose.content.iteration > iteration {
+                info!("Behind");
+                if self.proposes.contains_key(&propose.last_notarized_iter) && propose.last_notarized_cert.len() >= self.probabilistic_quorum_size {
                     let block = self.proposes.get(&propose.last_notarized_iter).unwrap();
                     let header = SimplexBlockHeader::from(block);
                     if !self.environment.test_flag {
-                        for vote_signature in propose.last_notarized_cert.iter() {
-                            match self.public_keys.get(&vote_signature.node) {
-                                Some(key) => {
-                                    let public_key = UnparsedPublicKey::new(&ED25519, key);
-                                    let serialized_message = match serialize(&header) {
-                                        Ok(msg) => msg,
-                                        Err(e) => {
-                                            error!("Failed to serialize message: {}", e);
-                                            return;
-                                        }
-                                    };
-                                    match public_key.verify(&serialized_message, vote_signature.signature.as_ref()) {
-                                        Ok(_) => { }
-                                        Err(_) => {
-                                            warn!("Propose Signature verification failed");
-                                            return;
+                        let all_verified = propose.last_notarized_cert
+                            .par_iter()
+                            .map(|vote_signature| {
+                                match self.public_keys.get(&vote_signature.node) {
+                                    Some(key) => {
+                                        let public_key = UnparsedPublicKey::new(&ED25519, key);
+                                        let serialized_message = match serialize(&header) {
+                                            Ok(msg) => msg,
+                                            Err(e) => {
+                                                error!("Failed to serialize message: {}", e);
+                                                return false;
+                                            }
+                                        };
+                                        match public_key.verify(&serialized_message, vote_signature.signature.as_ref()) {
+                                            Ok(_) => { true }
+                                            Err(_) => {
+                                                warn!("Propose Signature verification failed");
+                                                return false;
+                                            }
                                         }
                                     }
+                                    None => return false,
                                 }
-                                None => return,
-                            }
+                            })
+                            .all(|verified| verified);
+                        if !all_verified { return }
+                    }
+                    info!("Behind: has propose");
+                    if iteration == propose.last_notarized_iter {
+                        let is_timeout = self.is_timeout.load(Ordering::SeqCst);
+                        self.blockchain.notarize(header, block.transactions.clone(), propose.last_notarized_cert).await;
+                        self.iteration.fetch_add(1, Ordering::SeqCst);
+                        if !is_timeout {
+                            let finalize = Self::create_finalize(iteration);
+                            let _ = dispatcher_queue_sender.send(finalize).await;
                         }
+                        self.handle_iteration_advance(dispatcher_queue_sender).await;
+                        let _ = reset_timer_sender.send(()).await;
+                    } else {
+                        info!("Behind: has not propose");
+                        self.request(sender, dispatcher_queue_sender).await;
                     }
-                    let is_timeout = self.is_timeout.load(Ordering::SeqCst);
-                    self.blockchain.notarize(
-                        header,
-                        propose.content.transactions,
-                        propose.last_notarized_cert
-                    ).await;
-                    self.iteration.fetch_add(1, Ordering::SeqCst);
-                    if !is_timeout {
-                        let finalize = Self::create_finalize(iteration);
-                        let _ = dispatcher_queue_sender.send(finalize).await;
-                    }
-                    self.handle_iteration_advance(dispatcher_queue_sender).await;
-                    let _ = reset_timer_sender.send(()).await;
-                } else {
-                    self.request(sender, dispatcher_queue_sender).await;
                 }
             }
         }
@@ -563,7 +575,7 @@ impl ProbabilisticSimplex {
         dispatcher_queue_sender: &Sender<Dispatch>,
         reset_timer_sender: &Sender<()>,
     ) {
-        info!("Received Reply {:?}", reply.blocks);
+        info!("Received Reply");
         let mut is_reset = false;
         for notarized in reply.blocks {
             if self.blockchain.is_missing(notarized.block.length, notarized.block.iteration) {
@@ -588,6 +600,7 @@ impl ProbabilisticSimplex {
     }
 
     async fn request(&self, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
+        info!("Request sent");
         let request = Dispatch::Request(self.blockchain.last_notarized().block.length, sender);
         let _ = dispatcher_queue_sender.send(request).await;
     }

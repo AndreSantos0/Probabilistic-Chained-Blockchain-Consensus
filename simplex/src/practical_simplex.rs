@@ -317,10 +317,7 @@ impl PracticalSimplex {
                         }
                     }
                     PracticalSimplexMessage::Reply(reply) => {
-                        if reply.blocks.is_empty() {
-                            return;
-                        }
-
+                        if reply.blocks.is_empty() { continue }
                         for notarized in &reply.blocks {
                             let transactions_data = match serialize(&notarized.transactions) {
                                 Ok(data) => data,
@@ -329,13 +326,8 @@ impl PracticalSimplex {
                                     continue;
                                 }
                             };
-
                             let hashed_transactions = Sha256::digest(&transactions_data).to_vec();
-
-                            if hashed_transactions != notarized.block.transactions {
-                                continue;
-                            }
-
+                            if hashed_transactions != notarized.block.transactions { continue }
                             if notarized.signatures.len() >= quorum_size {
                                 let all_verified = notarized.signatures
                                     .par_iter()
