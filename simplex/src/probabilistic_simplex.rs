@@ -406,7 +406,6 @@ impl ProbabilisticSimplex {
 
             if propose.content.iteration == iteration {
                 if is_extendable && !self.is_timeout.load(Ordering::SeqCst) {
-                    info!("Voted");
                     let block = SimplexBlockHeader::from(&propose.content);
                     let vote = Self::create_vote(iteration, block);
                     let _ = dispatcher_queue_sender.send(vote).await;
@@ -429,7 +428,6 @@ impl ProbabilisticSimplex {
             }
 
             if propose.content.iteration > iteration {
-                info!("Behind");
                 if self.proposes.contains_key(&propose.last_notarized_iter) && propose.last_notarized_cert.len() >= self.probabilistic_quorum_size {
                     let block = self.proposes.get(&propose.last_notarized_iter).unwrap();
                     let header = SimplexBlockHeader::from(block);
@@ -461,7 +459,6 @@ impl ProbabilisticSimplex {
                             .all(|verified| verified);
                         if !all_verified { return }
                     }
-                    info!("Behind: has propose");
                     if iteration == propose.last_notarized_iter {
                         let is_timeout = self.is_timeout.load(Ordering::SeqCst);
                         self.blockchain.notarize(header, block.transactions.clone(), propose.last_notarized_cert).await;
@@ -473,7 +470,6 @@ impl ProbabilisticSimplex {
                         self.handle_iteration_advance(dispatcher_queue_sender).await;
                         let _ = reset_timer_sender.send(()).await;
                     } else {
-                        info!("Behind: has not propose");
                         self.request(sender, dispatcher_queue_sender).await;
                     }
                 }

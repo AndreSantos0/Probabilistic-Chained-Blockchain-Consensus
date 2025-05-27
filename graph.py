@@ -6,8 +6,8 @@ import numpy as np
 sns.set_theme(style="whitegrid")
 
 # Load and prepare both datasets
-df1 = pd.read_csv('simplex_2.csv', sep=';', decimal=',')
-df2 = pd.read_csv('pro_simplex_2.csv', sep=';', decimal=',')
+df1 = pd.read_csv('simplex.csv', sep=';', decimal=',')
+df2 = pd.read_csv('pro_simplex.csv', sep=';', decimal=',')
 
 df1['txs_sec'] = df1['txs_sec'].astype(float)
 df2['txs_sec'] = df2['txs_sec'].astype(float)
