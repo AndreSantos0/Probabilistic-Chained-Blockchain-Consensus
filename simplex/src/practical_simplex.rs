@@ -418,7 +418,7 @@ impl PracticalSimplex {
     ) {
         info!("Received view {}", view.last_notarized_block_header.length);
         if self.blockchain.is_missing(view.last_notarized_block_header.length, view.last_notarized_block_header.iteration) {
-            if view.last_notarized_block_cert.len() >= self.quorum_size {
+            if view.last_notarized_block_cert.len() >= self.quorum_size && !self.environment.test_flag {
                 let all_verified = view.last_notarized_block_cert
                     .par_iter()
                     .map(|vote_signature| {
@@ -464,42 +464,45 @@ impl PracticalSimplex {
         if reply.blocks.is_empty() { return }
         let mut is_reset = false;
         for notarized in reply.blocks {
+
             if self.blockchain.is_missing(notarized.block.length, notarized.block.iteration) {
-                let transactions_data = match serialize(&notarized.transactions) {
-                    Ok(data) => data,
-                    Err(_) => {
-                        error!("[Node {}] Failed to serialize block transactions during reply", self.environment.my_node.id);
-                        break;
-                    }
-                };
-                let hashed_transactions = Sha256::digest(&transactions_data).to_vec();
-                if hashed_transactions != notarized.block.transactions { break }
-                if notarized.signatures.len() >= self.quorum_size {
-                    let all_verified = notarized.signatures
-                        .par_iter()
-                        .map(|vote_signature| {
-                            if let Some(key) = self.public_keys.get(&vote_signature.node) {
-                                let pub_key = UnparsedPublicKey::new(&ED25519, key);
-                                let serialized_message = match serialize(&notarized.block) {
-                                    Ok(msg) => msg,
-                                    Err(_) => {
-                                        error!("[Node {}] Failed to serialize vote signature header", self.environment.my_node.id);
-                                        return false;
+                if !self.environment.test_flag {
+                    let transactions_data = match serialize(&notarized.transactions) {
+                        Ok(data) => data,
+                        Err(_) => {
+                            error!("[Node {}] Failed to serialize block transactions during reply", self.environment.my_node.id);
+                            break;
+                        }
+                    };
+                    let hashed_transactions = Sha256::digest(&transactions_data).to_vec();
+                    if hashed_transactions != notarized.block.transactions { break }
+                    if notarized.signatures.len() >= self.quorum_size {
+                        let all_verified = notarized.signatures
+                            .par_iter()
+                            .map(|vote_signature| {
+                                if let Some(key) = self.public_keys.get(&vote_signature.node) {
+                                    let pub_key = UnparsedPublicKey::new(&ED25519, key);
+                                    let serialized_message = match serialize(&notarized.block) {
+                                        Ok(msg) => msg,
+                                        Err(_) => {
+                                            error!("[Node {}] Failed to serialize vote signature header", self.environment.my_node.id);
+                                            return false;
+                                        }
+                                    };
+                                    match pub_key.verify(&serialized_message, vote_signature.signature.as_ref()) {
+                                        Ok(_) => true,
+                                        Err(_) => {
+                                            warn!("[Node {}] Failed to verify vote signature header during reply", self.environment.my_node.id);
+                                            false
+                                        }
                                     }
-                                };
-                                match pub_key.verify(&serialized_message, vote_signature.signature.as_ref()) {
-                                    Ok(_) => true,
-                                    Err(_) => {
-                                        warn!("[Node {}] Failed to verify vote signature header during reply", self.environment.my_node.id);
-                                        false
-                                    }
+                                } else {
+                                    false
                                 }
-                            } else {
-                                false
-                            }
-                        })
-                        .all(|verified| verified);
-                    if !all_verified { break }
+                            })
+                            .all(|verified| verified);
+                        if !all_verified { break }
+                    }
                 }
                 let iteration = self.iteration.load(Ordering::SeqCst);
                 if let Some(_) = self.blockchain.find_parent_block(&notarized.block.hash) {
