@@ -415,15 +415,17 @@ impl ProbabilisticSimplex {
         dispatcher_queue_sender: &Sender<Dispatch>,
         reset_timer_sender: &Sender<()>,
     ) {
-        if !vote.sample.contains(&self.environment.my_node.id) {
-            return;
-        }
-        let public_key = UnparsedPublicKey::new(&ED25519, self.public_keys.get(&sender)
-            .expect(&format!("[Node {}] Error getting public key of Node {}", self.environment.my_node.id, sender)));
-        let n_nodes = self.environment.nodes.len();
-        let leader = Self::get_leader(n_nodes, vote.iteration + 1);
-        if !vrf_verify(public_key, &format!("{}vote", vote.iteration), self.sample_size, n_nodes as u32, leader, vote.sample.clone().into_iter().collect(), &vote.proof) {
-            return;
+        if !self.environment.test_flag {
+            if !vote.sample.contains(&self.environment.my_node.id) {
+                return;
+            }
+            let public_key = UnparsedPublicKey::new(&ED25519, self.public_keys.get(&sender)
+                .expect(&format!("[Node {}] Error getting public key of Node {}", self.environment.my_node.id, sender)));
+            let n_nodes = self.environment.nodes.len();
+            let leader = Self::get_leader(n_nodes, vote.iteration + 1);
+            if !vrf_verify(public_key, &format!("{}vote", vote.iteration), self.sample_size, n_nodes as u32, leader, vote.sample.clone().into_iter().collect(), &vote.proof) {
+                return;
+            }
         }
         info!("Received vote {}", vote.iteration);
         let vote_signatures = self.votes.entry(vote.header).or_insert_with(Vec::new);
@@ -483,15 +485,17 @@ impl ProbabilisticSimplex {
     }
 
     async fn handle_finalize(&mut self, finalize: ProbFinalize, sender: u32) {
-        if !finalize.sample.contains(&self.environment.my_node.id) {
-            return;
-        }
-        let public_key = UnparsedPublicKey::new(&ED25519, self.public_keys.get(&sender)
-            .expect(&format!("[Node {}] Error getting public key of Node {}", self.environment.my_node.id, sender)));
-        let n_nodes = self.environment.nodes.len();
-        let leader = Self::get_leader(n_nodes, finalize.iter + 1);
-        if !vrf_verify(public_key, &format!("{}finalize", finalize.iter), self.sample_size, n_nodes as u32, leader, finalize.sample.clone().into_iter().collect(), &finalize.proof) {
-            return;
+        if !self.environment.test_flag {
+            if !finalize.sample.contains(&self.environment.my_node.id) {
+                return;
+            }
+            let public_key = UnparsedPublicKey::new(&ED25519, self.public_keys.get(&sender)
+                .expect(&format!("[Node {}] Error getting public key of Node {}", self.environment.my_node.id, sender)));
+            let n_nodes = self.environment.nodes.len();
+            let leader = Self::get_leader(n_nodes, finalize.iter + 1);
+            if !vrf_verify(public_key, &format!("{}finalize", finalize.iter), self.sample_size, n_nodes as u32, leader, finalize.sample.clone().into_iter().collect(), &finalize.proof) {
+                return;
+            }
         }
         info!("Received finalize {}", finalize.iter);
         let finalizes = self.finalizes.entry(finalize.iter).or_insert_with(Vec::new);
