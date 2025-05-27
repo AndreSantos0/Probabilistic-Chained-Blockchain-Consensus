@@ -111,9 +111,8 @@ impl Protocol for PracticalSimplex {
                     let enable_crypto = !self.environment.test_flag;
                     let my_node_id = self.environment.my_node.id;
                     let public_keys = self.public_keys.clone();
-                    let quorum_size = self.quorum_size;
                     tokio::spawn(async move {
-                        Self::handle_connection(enable_crypto, stream, sender, &public_keys, quorum_size, my_node_id, claimed_id).await;
+                        Self::handle_connection(enable_crypto, stream, sender, &public_keys, my_node_id, claimed_id).await;
                     });
                 } else {
                     warn!("[Node {}] Invalid signature from claimed Node {}", self.environment.my_node.id, claimed_id);
@@ -243,7 +242,6 @@ impl PracticalSimplex {
         mut stream: TcpStream,
         message_queue_sender: Sender<(NodeId, PracticalSimplexMessage)>,
         public_keys: &HashMap<u32, Vec<u8>>,
-        quorum_size: usize,
         my_node_id: NodeId,
         node_id: NodeId,
     ) {
@@ -464,7 +462,6 @@ impl PracticalSimplex {
         if reply.blocks.is_empty() { return }
         let mut is_reset = false;
         for notarized in reply.blocks {
-
             if self.blockchain.is_missing(notarized.block.length, notarized.block.iteration) {
                 if !self.environment.test_flag {
                     let transactions_data = match serialize(&notarized.transactions) {
