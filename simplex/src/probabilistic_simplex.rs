@@ -123,8 +123,11 @@ impl Protocol for ProbabilisticSimplex {
                     let enable_crypto = !self.environment.test_flag;
                     let my_node_id = self.environment.my_node.id;
                     let public_keys = self.public_keys.clone();
+                    let sample_size = self.sample_size;
+                    let n_nodes = self.environment.nodes.len();
+                    let probabilistic_quorum_size = self.probabilistic_quorum_size;
                     tokio::spawn(async move {
-                        Self::handle_connection(enable_crypto, stream, sender, &public_keys, my_node_id, claimed_id).await;
+                        Self::handle_connection(enable_crypto, stream, sender, &public_keys, sample_size, n_nodes, probabilistic_quorum_size, my_node_id, claimed_id).await;
                     });
                 } else {
                     warn!("[Node {}] Invalid signature from claimed Node {}", self.environment.my_node.id, claimed_id);
@@ -281,6 +284,9 @@ impl ProbabilisticSimplex {
         mut stream: TcpStream,
         message_queue_sender: Sender<(NodeId, ProbabilisticSimplexMessage)>,
         public_keys: &HashMap<u32, Vec<u8>>,
+        sample_size: usize,
+        n_nodes: usize,
+        probabilistic_quorum_size: usize,
         my_node_id: NodeId,
         node_id: NodeId,
     ) {
@@ -322,6 +328,69 @@ impl ProbabilisticSimplex {
                 if !public_key.verify(&payload, signature).is_ok() {
                     continue;
                 }
+
+                match &message {
+                    ProbabilisticSimplexMessage::Vote(vote) => {
+                        if !vote.sample.contains(&my_node_id) {
+                            continue
+                        }
+                        let leader = Self::get_leader(n_nodes, vote.iteration + 1);
+                        if !vrf_verify(public_key, &format!("{}vote", vote.iteration), sample_size, n_nodes as u32, leader, vote.sample.clone().into_iter().collect(), &vote.proof) {
+                            continue;
+                        }
+                    }
+                    ProbabilisticSimplexMessage::Finalize(finalize) => {
+                        if !finalize.sample.contains(&my_node_id) {
+                            continue
+                        }
+                        let leader = Self::get_leader(n_nodes, finalize.iter + 1);
+                        if !vrf_verify(public_key, &format!("{}finalize", finalize.iter), sample_size, n_nodes as u32, leader, finalize.sample.clone().into_iter().collect(), &finalize.proof) {
+                            continue;
+                        }
+                    }
+                    ProbabilisticSimplexMessage::Reply(reply) => {
+                        if reply.blocks.is_empty() { continue }
+                        for notarized in &reply.blocks {
+                            let transactions_data = match serialize(&notarized.transactions) {
+                                Ok(data) => data,
+                                Err(_) => {
+                                    error!("[Node {}] Failed to serialize block transactions during reply", my_node_id);
+                                    continue;
+                                }
+                            };
+                            let hashed_transactions = Sha256::digest(&transactions_data).to_vec();
+                            if hashed_transactions != notarized.block.transactions { continue }
+                            if notarized.signatures.len() >= probabilistic_quorum_size {
+                                let all_verified = notarized.signatures
+                                    .par_iter()
+                                    .map(|vote_signature| {
+                                        if let Some(key) = public_keys.get(&vote_signature.node) {
+                                            let pub_key = UnparsedPublicKey::new(&ED25519, key);
+                                            let serialized_message = match serialize(&notarized.block) {
+                                                Ok(msg) => msg,
+                                                Err(_) => {
+                                                    error!("[Node {}] Failed to serialize vote signature header", my_node_id);
+                                                    return false;
+                                                }
+                                            };
+                                            match pub_key.verify(&serialized_message, vote_signature.signature.as_ref()) {
+                                                Ok(_) => true,
+                                                Err(_) => {
+                                                    warn!("[Node {}] Failed to verify vote signature header during reply", my_node_id);
+                                                    false
+                                                }
+                                            }
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                    .all(|verified| verified);
+                                if !all_verified { continue }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
             let _ = message_queue_sender.send((node_id, message)).await;
         }
@@ -337,6 +406,7 @@ impl ProbabilisticSimplex {
 
             if propose.content.iteration == iteration {
                 if is_extendable && !self.is_timeout.load(Ordering::SeqCst) {
+                    info!("Voted");
                     let block = SimplexBlockHeader::from(&propose.content);
                     let vote = Self::create_vote(iteration, block);
                     let _ = dispatcher_queue_sender.send(vote).await;
@@ -359,6 +429,7 @@ impl ProbabilisticSimplex {
             }
 
             if propose.content.iteration > iteration {
+                info!("Behind");
                 if self.proposes.contains_key(&propose.last_notarized_iter) && propose.last_notarized_cert.len() >= self.probabilistic_quorum_size {
                     let block = self.proposes.get(&propose.last_notarized_iter).unwrap();
                     let header = SimplexBlockHeader::from(block);
@@ -390,6 +461,7 @@ impl ProbabilisticSimplex {
                             .all(|verified| verified);
                         if !all_verified { return }
                     }
+                    info!("Behind: has propose");
                     if iteration == propose.last_notarized_iter {
                         let is_timeout = self.is_timeout.load(Ordering::SeqCst);
                         self.blockchain.notarize(header, block.transactions.clone(), propose.last_notarized_cert).await;
@@ -401,6 +473,7 @@ impl ProbabilisticSimplex {
                         self.handle_iteration_advance(dispatcher_queue_sender).await;
                         let _ = reset_timer_sender.send(()).await;
                     } else {
+                        info!("Behind: has not propose");
                         self.request(sender, dispatcher_queue_sender).await;
                     }
                 }
@@ -415,18 +488,6 @@ impl ProbabilisticSimplex {
         dispatcher_queue_sender: &Sender<Dispatch>,
         reset_timer_sender: &Sender<()>,
     ) {
-        if !self.environment.test_flag {
-            if !vote.sample.contains(&self.environment.my_node.id) {
-                return;
-            }
-            let public_key = UnparsedPublicKey::new(&ED25519, self.public_keys.get(&sender)
-                .expect(&format!("[Node {}] Error getting public key of Node {}", self.environment.my_node.id, sender)));
-            let n_nodes = self.environment.nodes.len();
-            let leader = Self::get_leader(n_nodes, vote.iteration + 1);
-            if !vrf_verify(public_key, &format!("{}vote", vote.iteration), self.sample_size, n_nodes as u32, leader, vote.sample.clone().into_iter().collect(), &vote.proof) {
-                return;
-            }
-        }
         info!("Received vote {}", vote.iteration);
         let vote_signatures = self.votes.entry(vote.header).or_insert_with(Vec::new);
         let is_first_vote = !vote_signatures.iter().any(|vote_signature| vote_signature.node == sender);
@@ -485,18 +546,6 @@ impl ProbabilisticSimplex {
     }
 
     async fn handle_finalize(&mut self, finalize: ProbFinalize, sender: u32) {
-        if !self.environment.test_flag {
-            if !finalize.sample.contains(&self.environment.my_node.id) {
-                return;
-            }
-            let public_key = UnparsedPublicKey::new(&ED25519, self.public_keys.get(&sender)
-                .expect(&format!("[Node {}] Error getting public key of Node {}", self.environment.my_node.id, sender)));
-            let n_nodes = self.environment.nodes.len();
-            let leader = Self::get_leader(n_nodes, finalize.iter + 1);
-            if !vrf_verify(public_key, &format!("{}finalize", finalize.iter), self.sample_size, n_nodes as u32, leader, finalize.sample.clone().into_iter().collect(), &finalize.proof) {
-                return;
-            }
-        }
         info!("Received finalize {}", finalize.iter);
         let finalizes = self.finalizes.entry(finalize.iter).or_insert_with(Vec::new);
         let is_first_finalize = !finalizes.iter().any(|node_id| *node_id == sender);
@@ -528,47 +577,8 @@ impl ProbabilisticSimplex {
     ) {
         info!("Received Reply");
         let mut is_reset = false;
-        if reply.blocks.is_empty() { return }
         for notarized in reply.blocks {
             if self.blockchain.is_missing(notarized.block.length, notarized.block.iteration) {
-                if !self.environment.test_flag {
-                    let transactions_data = match serialize(&notarized.transactions) {
-                        Ok(data) => data,
-                        Err(_) => {
-                            error!("[Node {}] Failed to serialize block transactions during reply", self.environment.my_node.id);
-                            continue;
-                        }
-                    };
-                    let hashed_transactions = Sha256::digest(&transactions_data).to_vec();
-                    if hashed_transactions != notarized.block.transactions { break }
-                    if notarized.signatures.len() >= self.probabilistic_quorum_size {
-                        let all_verified = notarized.signatures
-                            .par_iter()
-                            .map(|vote_signature| {
-                                if let Some(key) = self.public_keys.get(&vote_signature.node) {
-                                    let pub_key = UnparsedPublicKey::new(&ED25519, key);
-                                    let serialized_message = match serialize(&notarized.block) {
-                                        Ok(msg) => msg,
-                                        Err(_) => {
-                                            error!("[Node {}] Failed to serialize vote signature header", self.environment.my_node.id);
-                                            return false;
-                                        }
-                                    };
-                                    match pub_key.verify(&serialized_message, vote_signature.signature.as_ref()) {
-                                        Ok(_) => true,
-                                        Err(_) => {
-                                            warn!("[Node {}] Failed to verify vote signature header during reply", self.environment.my_node.id);
-                                            false
-                                        }
-                                    }
-                                } else {
-                                    false
-                                }
-                            })
-                            .all(|verified| verified);
-                        if !all_verified { break; }
-                    }
-                }
                 let iteration = self.iteration.load(Ordering::SeqCst);
                 if let Some(_) = self.blockchain.find_parent_block(&notarized.block.hash) {
                     self.blockchain.notarize(notarized.block.clone(), notarized.transactions.clone(), notarized.signatures.clone()).await;
