@@ -21,6 +21,8 @@ df = pd.concat([df1, df2], ignore_index=True)
 grouped = df.groupby(['tx_size_bytes', 'txs_per_block'])
 
 fig, axes = plt.subplots(1, len(grouped), figsize=(18, 6), sharey=True)
+if len(grouped) == 1:
+    axes = [axes]
 
 palette = {
     'Simplex': '#1f77b4',      # Blue
