@@ -6,8 +6,8 @@ import numpy as np
 sns.set_theme(style="whitegrid")
 
 # Load and prepare both datasets
-df1 = pd.read_csv('simplex.csv', sep=';', decimal=',')
-df2 = pd.read_csv('pro_simplex.csv', sep=';', decimal=',')
+df1 = pd.read_csv('s_t.csv', sep=';', decimal=',')
+df2 = pd.read_csv('p_t.csv', sep=';', decimal=',')
 
 df1['txs_sec'] = df1['txs_sec'].astype(float)
 df2['txs_sec'] = df2['txs_sec'].astype(float)
@@ -28,6 +28,9 @@ palette = {
     'Simplex': '#1f77b4',      # Blue
     'ProSimplex': '#ff7f0e'    # Orange
 }
+
+# Set consistent Y-axis limit
+y_max = 130000
 
 for ax, ((tx_size, txs_per_block), group) in zip(axes, grouped):
     stats = group.groupby(['num_nodes', 'Protocol'])['txs_sec'].agg(['mean', 'std']).reset_index()
@@ -53,6 +56,7 @@ for ax, ((tx_size, txs_per_block), group) in zip(axes, grouped):
     ax.set_xlabel('Number of Nodes')
     ax.set_xticks(x + width / 2)
     ax.set_xticklabels([str(n) for n in num_nodes])
+    ax.set_ylim(0, y_max)  # Apply consistent Y-axis scale
 
 axes[0].set_ylabel('Throughput (txs/s)')
 axes[0].legend(title='Protocol', loc='upper left')

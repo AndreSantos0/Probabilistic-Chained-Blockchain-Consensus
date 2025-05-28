@@ -6,7 +6,7 @@ use chrono::{Local, Timelike};
 use csv::ReaderBuilder;
 use toml::Value;
 use base64::{engine::general_purpose, Engine as _};
-use ring::signature::Ed25519KeyPair;
+use ring::signature::{Ed25519KeyPair, UnparsedPublicKey, ED25519};
 use tokio::time::{sleep, Duration};
 use crate::domain::environment::Environment;
 use crate::domain::node::Node;
@@ -56,7 +56,7 @@ pub fn read_nodes_from_csv(file_path: &str) -> Result<Vec<Node>, Box<dyn Error>>
     Ok(nodes)
 }
 
-pub fn get_public_keys() -> HashMap<u32, Vec<u8>> {
+pub fn get_public_keys() -> HashMap<u32, UnparsedPublicKey<Vec<u8>>> {
     let content = fs::read_to_string(PUBLIC_KEYS_FILENAME).expect("Failed to read public key file");
     let data: Value = content.parse::<Value>().expect("Failed to parse TOML data");
     let data_table = data.as_table().expect("Expected TOML data to be a table");
@@ -65,7 +65,7 @@ pub fn get_public_keys() -> HashMap<u32, Vec<u8>> {
         if let Some(public_key_str) = node_info.get(PUBLIC_KEYS_FILE_INDEX).and_then(|v| v.as_str()) {
             let id = node_id.parse::<u32>().expect("Failed to parse node id from public key file");
             let public_key_bytes = general_purpose::STANDARD.decode(public_key_str).expect("Failed to decode base64 public key");
-            public_keys.insert(id, public_key_bytes);
+            public_keys.insert(id, UnparsedPublicKey::new(&ED25519, public_key_bytes));
         }
     }
     public_keys

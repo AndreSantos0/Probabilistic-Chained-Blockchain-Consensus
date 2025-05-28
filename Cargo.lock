@@ -748,17 +748,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sha1"
-version = "0.11.0-pre.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9540978cef7a8498211c1b1c14e5ce920fe5bd524ea84f4a3d72d4602515ae93"
-dependencies = [
- "cfg-if",
- "cpufeatures",
- "digest",
-]
-
-[[package]]
 name = "sha2"
 version = "0.11.0-pre.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -828,23 +817,6 @@ name = "spin"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
-
-[[package]]
-name = "streamlet"
-version = "0.1.0"
-dependencies = [
- "base64",
- "chrono",
- "csv",
- "rand",
- "ring",
- "serde",
- "serde_json",
- "sha1",
- "shared",
- "tokio",
- "toml",
-]
 
 [[package]]
 name = "syn"

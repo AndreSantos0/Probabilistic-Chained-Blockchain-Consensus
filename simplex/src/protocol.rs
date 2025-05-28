@@ -1,7 +1,7 @@
 use crate::block::{SimplexBlockHeader, NodeId, NotarizedBlock, SimplexBlock};
 use crate::blockchain::Blockchain;
 use crate::message::{Dispatch, SimplexMessage};
-use ring::signature::Ed25519KeyPair;
+use ring::signature::{Ed25519KeyPair, UnparsedPublicKey};
 use sha2::{Digest, Sha256};
 use shared::domain::environment::Environment;
 use shared::transaction_generator::TransactionGenerator;
@@ -26,11 +26,11 @@ pub trait Protocol {
     const MESSAGE_CHANNEL_SIZE: usize = 1000;
     const RESET_TIMER_CHANNEL_SIZE: usize = 100;
     const SOCKET_BINDING_DELAY: u64 = 5;
-    const TRANSACTION_SIZE: usize = 992;
+    const TRANSACTION_SIZE: usize = 0;
 
     type Message: SimplexMessage;
 
-    fn new(environment: Environment, public_keys: HashMap<u32, Vec<u8>>, private_key: Ed25519KeyPair) -> Self;
+    fn new(environment: Environment, public_keys: HashMap<u32, UnparsedPublicKey<Vec<u8>>>, private_key: Ed25519KeyPair) -> Self;
     fn get_environment(&self) -> &Environment;
     fn get_iteration(&self) -> &Arc<AtomicU32>;
     fn get_is_timeout(&self) -> &Arc<AtomicBool>;

@@ -35,7 +35,7 @@ pub struct ProbabilisticSimplex {
     finalizes: HashMap<u32, Vec<u32>>,
     blockchain: Blockchain,
     transaction_generator: TransactionGenerator,
-    public_keys: HashMap<u32, Vec<u8>>,
+    public_keys: HashMap<u32, UnparsedPublicKey<Vec<u8>>>,
     private_key: Ed25519KeyPair,
 }
 
@@ -47,7 +47,7 @@ impl Protocol for ProbabilisticSimplex {
 
     type Message = ProbabilisticSimplexMessage;
 
-    fn new(environment: Environment, public_keys: HashMap<u32, Vec<u8>>, private_key: Ed25519KeyPair) -> Self {
+    fn new(environment: Environment, public_keys: HashMap<u32, UnparsedPublicKey<Vec<u8>>>, private_key: Ed25519KeyPair) -> Self {
         let my_node_id = environment.my_node.id;
         let n = environment.nodes.len();
         ProbabilisticSimplex {
@@ -116,8 +116,7 @@ impl Protocol for ProbabilisticSimplex {
             stream.read_exact(&mut nonce).await.expect(&format!("[Node {}] Failed reading during handshake", self.environment.my_node.id));
             let mut sig = vec![0u8; SIGNATURE_BYTES_LENGTH];
             stream.read_exact(&mut sig).await.expect(&format!("[Node {}] Failed reading during handshake", self.environment.my_node.id));
-            if let Some(pubkey) = self.public_keys.get(&claimed_id) {
-                let key = UnparsedPublicKey::new(&ED25519, pubkey);
+            if let Some(key) = self.public_keys.get(&claimed_id) {
                 if key.verify(&nonce, &sig).is_ok() {
                     let sender = message_queue_sender.clone();
                     let enable_crypto = !self.environment.test_flag;
@@ -283,14 +282,14 @@ impl ProbabilisticSimplex {
         enable_crypto: bool,
         mut stream: TcpStream,
         message_queue_sender: Sender<(NodeId, ProbabilisticSimplexMessage)>,
-        public_keys: &HashMap<u32, Vec<u8>>,
+        public_keys: &HashMap<u32, UnparsedPublicKey<Vec<u8>>>,
         sample_size: usize,
         n_nodes: usize,
         probabilistic_quorum_size: usize,
         my_node_id: NodeId,
         node_id: NodeId,
     ) {
-        let public_key = UnparsedPublicKey::new(&ED25519, public_keys.get(&node_id).expect(&format!("[Node {}] Error getting public key of Node {}", my_node_id, node_id)));
+        let public_key = public_keys.get(&node_id).expect(&format!("[Node {}] Error getting public key of Node {}", my_node_id, node_id));
         loop {
             let mut length_bytes = [0; MESSAGE_BYTES_LENGTH];
             if stream.read_exact(&mut length_bytes).await.is_err() {
@@ -365,7 +364,6 @@ impl ProbabilisticSimplex {
                                     .par_iter()
                                     .map(|vote_signature| {
                                         if let Some(key) = public_keys.get(&vote_signature.node) {
-                                            let pub_key = UnparsedPublicKey::new(&ED25519, key);
                                             let serialized_message = match serialize(&notarized.block) {
                                                 Ok(msg) => msg,
                                                 Err(_) => {
@@ -373,7 +371,7 @@ impl ProbabilisticSimplex {
                                                     return false;
                                                 }
                                             };
-                                            match pub_key.verify(&serialized_message, vote_signature.signature.as_ref()) {
+                                            match key.verify(&serialized_message, vote_signature.signature.as_ref()) {
                                                 Ok(_) => true,
                                                 Err(_) => {
                                                     warn!("[Node {}] Failed to verify vote signature header during reply", my_node_id);

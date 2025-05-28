@@ -32,7 +32,7 @@ pub fn vrf_prove(
 }
 
 pub fn vrf_verify(
-    public_key: UnparsedPublicKey<&Vec<u8>>,
+    public_key: &UnparsedPublicKey<Vec<u8>>,
     seed: &str,
     sample_size: usize,
     s: u32,
