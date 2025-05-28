@@ -360,17 +360,17 @@ impl ProbabilisticSimplex {
                             let hashed_transactions = Sha256::digest(&transactions_data).to_vec();
                             if hashed_transactions != notarized.block.transactions { continue }
                             if notarized.signatures.len() >= probabilistic_quorum_size {
+                                let serialized_message = match serialize(&notarized.block) {
+                                    Ok(msg) => msg,
+                                    Err(_) => {
+                                        error!("[Node {}] Failed to serialize vote signature header", my_node_id);
+                                        continue;
+                                    }
+                                };
                                 let all_verified = notarized.signatures
                                     .par_iter()
                                     .map(|vote_signature| {
                                         if let Some(key) = public_keys.get(&vote_signature.node) {
-                                            let serialized_message = match serialize(&notarized.block) {
-                                                Ok(msg) => msg,
-                                                Err(_) => {
-                                                    error!("[Node {}] Failed to serialize vote signature header", my_node_id);
-                                                    return false;
-                                                }
-                                            };
                                             match key.verify(&serialized_message, vote_signature.signature.as_ref()) {
                                                 Ok(_) => true,
                                                 Err(_) => {

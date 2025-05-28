@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use bincode::{deserialize, serialize};
-use futures::future::join_all;
 use log::{error, info, warn};
 use rayon::prelude::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -293,37 +292,26 @@ impl PracticalSimplex {
                                 Ok(msg) => msg,
                                 Err(_) => {
                                     error!("[Node {}] Failed to deserialize vote signature header", my_node_id);
-                                    continue;
+                                   continue;
                                 }
                             };
-                            let tasks: Vec<_> = view.last_notarized_block_cert.iter()
+                            let all_verified = view.last_notarized_block_cert
+                                .par_iter()
                                 .map(|vote_signature| {
-                                    let value = serialized_message.clone();
-                                    let keys = public_keys.clone();
-                                    let sig = vote_signature.clone();
-                                    tokio::spawn(async move {
-                                        if let Some(key) = keys.get(&sig.node) {
-                                            return match key.verify(&value, sig.signature.as_ref()) {
-                                                Ok(_) => Some(true),
-                                                Err(_) => {
-                                                    warn!("[Node {}] Failed to verify vote signature header during view", my_node_id);
-                                                    Some(false)
-                                                }
+                                    if let Some(key) = public_keys.get(&vote_signature.node) {
+                                        match key.verify(&serialized_message, vote_signature.signature.as_ref()) {
+                                            Ok(_) => true,
+                                            Err(_) => {
+                                                warn!("[Node {}] Failed to verify vote signature header during view", my_node_id);
+                                                false
                                             }
                                         }
-                                        Some(false)
-                                    })
+                                    } else {
+                                        false
+                                    }
                                 })
-                                .collect();
-                            let all_verified = join_all(tasks).await;
-                            if !all_verified.into_iter().all(|item| {
-                                match item {
-                                    Ok(Some(true)) => true,
-                                    Ok(Some(false)) => false,
-                                    Ok(None) => false,
-                                    Err(_) => false,
-                                }
-                            }) { continue }
+                                .all(|verified| verified);
+                            if !all_verified { continue }
                         }
                     }
                     PracticalSimplexMessage::Reply(reply) => {
@@ -339,17 +327,17 @@ impl PracticalSimplex {
                             let hashed_transactions = Sha256::digest(&transactions_data).to_vec();
                             if hashed_transactions != notarized.block.transactions { continue }
                             if notarized.signatures.len() >= quorum_size {
+                                let serialized_message = match serialize(&notarized.block) {
+                                    Ok(msg) => msg,
+                                    Err(_) => {
+                                        error!("[Node {}] Failed to serialize vote signature header", my_node_id);
+                                        continue;
+                                    }
+                                };
                                 let all_verified = notarized.signatures
                                     .par_iter()
                                     .map(|vote_signature| {
                                         if let Some(key) = public_keys.get(&vote_signature.node) {
-                                            let serialized_message = match serialize(&notarized.block) {
-                                                Ok(msg) => msg,
-                                                Err(_) => {
-                                                    error!("[Node {}] Failed to serialize vote signature header", my_node_id);
-                                                    return false;
-                                                }
-                                            };
                                             match key.verify(&serialized_message, vote_signature.signature.as_ref()) {
                                                 Ok(_) => true,
                                                 Err(_) => {
