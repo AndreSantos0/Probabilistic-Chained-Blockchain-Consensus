@@ -156,10 +156,12 @@ impl Blockchain {
                 .await
                 .expect("Could not open blockchain file");
 
-            for notarized in blocks_to_be_finalized.iter().rev() {
-                let block_data = to_string(&notarized).expect("Failed to serialize block") + "\n";
-                file.write_all(block_data.as_bytes()).await.expect("Error writing block to file");
-            }
+            let block_data = blocks_to_be_finalized.iter().rev().map(|notarized| {
+                to_string(notarized).expect("Failed to serialize block")+ "\n"
+            })
+            .collect::<Vec<String>>()
+            .join("");
+            file.write_all(block_data.as_bytes()).await.expect("Error writing blocks to file");
         });
 
         self.finalized_height = iteration;
