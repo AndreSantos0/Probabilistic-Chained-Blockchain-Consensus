@@ -40,7 +40,7 @@ async fn main() {
             match protocol_mode {
                 ProtocolMode::Practical => PracticalSimplex::new(env, public_keys, private_key).start().await,
                 ProtocolMode::Probabilistic => ProbabilisticSimplex::new(env, public_keys, private_key).start().await,
-            };Ate
+            };
         },
         Err(err) => {
             error!("Error: {}", err);
