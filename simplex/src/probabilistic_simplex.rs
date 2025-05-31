@@ -1,3 +1,4 @@
+/*
 use crate::block::{SimplexBlockHeader, SimplexBlock, VoteSignature, NodeId};
 use crate::blockchain::Blockchain;
 use crate::connection::{broadcast, broadcast_to_sample, generate_nonce, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
@@ -50,6 +51,8 @@ impl Protocol for ProbabilisticSimplex {
     fn new(environment: Environment, public_keys: HashMap<u32, UnparsedPublicKey<Vec<u8>>>, private_key: Ed25519KeyPair) -> Self {
         let my_node_id = environment.my_node.id;
         let n = environment.nodes.len();
+        let transaction_size = environment.transaction_size;
+        let n_transactions = environment.n_transactions;
         ProbabilisticSimplex {
             environment,
             quorum_size: n * 2 / 3 + 1,
@@ -62,7 +65,7 @@ impl Protocol for ProbabilisticSimplex {
             timeouts: HashMap::new(),
             finalizes: HashMap::new(),
             blockchain: Blockchain::new(my_node_id),
-            transaction_generator: TransactionGenerator::new(Self::TRANSACTION_SIZE),
+            transaction_generator: TransactionGenerator::new(transaction_size, n_transactions),
             public_keys,
             private_key
         }
@@ -603,3 +606,5 @@ impl ProbabilisticSimplex {
         let _ = dispatcher_queue_sender.send(request).await;
     }
 }
+
+ */

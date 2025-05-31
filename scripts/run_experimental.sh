@@ -12,20 +12,37 @@ SHARED_DIR="$REMOTE_DIR/shared"
 SET_KEYS_FILE="$SHARED_DIR/set_keys.env"
 NDJSON_FILE="$LOCAL_RESULTS_DIR/FinalizedBlocks_0.ndjson"
 
-ARGS=()
-if [[ "$2" == "test" ]] || [[ "$1" == "test" ]]; then
-  ARGS+=("test")
-fi
-if [[ "$2" == "prob" ]] || [[ "$1" == "prob" ]]; then
-  ARGS+=("probabilistic")
+if [[ $# -lt 2 ]]; then
+  echo "Usage: $0 <transaction_size> <n_transactions> [test] [prob]"
+  exit 1
 fi
 
-# Clean local results directory
+transaction_size="$1"
+n_transactions="$2"
+shift 2
+
+ARGS=("$transaction_size" "$n_transactions")
+
+for arg in "$@"; do
+  case "$arg" in
+    test)
+      ARGS+=("test")
+      ;;
+    prob)
+      ARGS+=("probabilistic")
+      ;;
+    *)
+      echo "Unknown mode: '$arg'. Supported optional modes are 'test' and 'prob'."
+      exit 1
+      ;;
+  esac
+done
+
 echo "🧹 Cleaning local results directory..."
 rm -rf "$LOCAL_RESULTS_DIR"
 mkdir -p "$LOCAL_RESULTS_DIR"
 
-echo "🚀 Running simplex on all nodes in parallel for 60 seconds with args: ${ARGS[*]}"
+echo "🚀 Running simplex on all nodes in parallel with args: ${ARGS[*]}"
 
 node_id=0
 pids=()
@@ -42,43 +59,35 @@ while read -r node; do
     cd $REMOTE_DIR || { echo '❌ Repo dir not found'; exit 1; }
     rm -f FinalizedBlocks_$node_id.ndjson
     source \$HOME/.cargo/env
-    timeout 65s cargo run --package simplex --bin simplex $node_id ${ARGS[*]} > /tmp/simplex_$node_id.log 2>&1
+    timeout 65s cargo run --package simplex --bin simplex $node_id ${ARGS[*]}
   " &
 
   pids+=($!)
   ((node_id++))
 done < "$NODES_FILE"
 
-set +e  # Allow failures temporarily
+set +e
 
-# Wait for all to finish
 for pid in "${pids[@]}"; do
   wait "$pid"
 done
 
-set -e  # Re-enable strict mode
+set -e
 
 echo "✅ All remote executions complete."
 
-# Now retrieve result files
-node_id=0
-read -r node < "$NODES_FILE"  # Read only the first line from the file
-
+read -r node < "$NODES_FILE"
 if [[ -n "$node" ]]; then
   FILE_NAME="FinalizedBlocks_0.ndjson"
   echo "📥 Retrieving result file $FILE_NAME from node $node..."
   scp "$SSH_USER@$node:$REMOTE_DIR/$FILE_NAME" "$LOCAL_RESULTS_DIR/$FILE_NAME" || echo "⚠️ Failed to retrieve $FILE_NAME from $node"
-  ((node_id++))
 else
   echo "❌ No node found in $NODES_FILE"
 fi
 
 echo "✅ All results collected in '$LOCAL_RESULTS_DIR/'"
 
-# Get the last line of the file
 last_line=$(tail -n 1 "$NDJSON_FILE")
-
-# Extract the value of "length" using grep and sed
 length=$(echo "$last_line" | grep -o '"length":[0-9]*' | sed 's/[^0-9]*//')
 
 if [ -n "$length" ]; then

@@ -21,10 +21,10 @@ pub fn generate_nonce() -> [u8; NONCE_BYTES_LENGTH] {
 pub async fn broadcast<M: SimplexMessage>(
     private_key: &Ed25519KeyPair,
     connections: &mut Vec<Option<TcpStream>>,
-    message: M,
+    message: &M,
     enable_crypto: bool,
 ) {
-    let payload = match serialize(&message) {
+    let payload = match serialize(message) {
         Ok(msg) => msg,
         Err(e) => {
             error!("Failed to serialize message: {}", e);
@@ -64,11 +64,12 @@ pub async fn broadcast<M: SimplexMessage>(
 pub async fn broadcast_to_sample<M: SimplexMessage>(
     private_key: &Ed25519KeyPair,
     connections: &mut Vec<Option<TcpStream>>,
-    message: M,
+    message: &M,
     sample_set: Vec<u32>,
+    my_node_id: u32,
     enable_crypto: bool,
 ) {
-    let payload = match serialize(&message) {
+    let payload = match serialize(message) {
         Ok(msg) => msg,
         Err(e) => {
             error!("Failed to serialize message: {}", e);
@@ -86,7 +87,12 @@ pub async fn broadcast_to_sample<M: SimplexMessage>(
     let mut failed_indices = vec![];
 
     for i in sample_set {
-        let stream = &mut connections[i as usize];
+        let id = if my_node_id >= i {
+            i
+        } else {
+            i - 1
+        };
+        let stream = &mut connections[id as usize];
         match stream {
             None => {}
             Some(stream) => {
@@ -95,7 +101,7 @@ pub async fn broadcast_to_sample<M: SimplexMessage>(
                     None => false,
                 } {
                     error!("Failed to send message to connection {}", i);
-                    failed_indices.push(i);
+                    failed_indices.push(id);
                 }
             }
         }
@@ -106,61 +112,15 @@ pub async fn broadcast_to_sample<M: SimplexMessage>(
     }
 }
 
-pub async fn notify<M: SimplexMessage>(
-    private_key: &Ed25519KeyPair,
-    connections: &mut Vec<Option<TcpStream>>,
-    message: M,
-    my_node_id: u32,
-    enable_crypto: bool,
-) {
-    let payload = match serialize(&message) {
-        Ok(msg) => msg,
-        Err(e) => {
-            error!("Failed to serialize message: {}", e);
-            return;
-        }
-    };
-
-    let length_bytes = (payload.len() as u32).to_be_bytes();
-    let signature = if message.is_vote() || !enable_crypto {
-        None
-    } else {
-        Some(private_key.sign(&payload))
-    };
-
-    let mut failed_indices = vec![];
-
-    for (i, stream) in connections.iter_mut().enumerate() {
-        if i == my_node_id as usize {
-            continue
-        }
-        match stream {
-            None => {}
-            Some(stream) => {
-                if stream.write_all(&length_bytes).await.is_err() || stream.write_all(&payload).await.is_err() || match &signature {
-                    Some(sig) => stream.write_all(sig.as_ref()).await.is_err(),
-                    None => false,
-                } {
-                    error!("Failed to send message to connection {}", i);
-                    failed_indices.push(i);
-                }
-            }
-        }
-    }
-
-    for i in failed_indices.into_iter().rev() {
-        connections[i] = None;
-    }
-}
-
 pub async fn unicast<M: SimplexMessage>(
     private_key: &Ed25519KeyPair,
     connections: &mut Vec<Option<TcpStream>>,
-    message: M,
+    message: &M,
     recipient: u32,
+    my_node_id: u32,
     enable_crypto: bool,
 ) {
-    let payload = match serialize(&message) {
+    let payload = match serialize(message) {
         Ok(msg) => msg,
         Err(e) => {
             error!("Failed to serialize message: {}", e);
@@ -175,7 +135,13 @@ pub async fn unicast<M: SimplexMessage>(
         Some(private_key.sign(&payload))
     };
 
-    let stream = &mut connections[recipient as usize];
+    let id = if my_node_id >= recipient {
+        recipient
+    } else {
+        recipient - 1
+    };
+
+    let stream = &mut connections[id as usize];
     match stream {
         None => {}
         Some(connection) => {
@@ -184,7 +150,7 @@ pub async fn unicast<M: SimplexMessage>(
                 None => false,
             } {
                 error!("Failed to send message to connection");
-                connections[recipient as usize] = None
+                connections[id as usize] = None
             }
         }
     }

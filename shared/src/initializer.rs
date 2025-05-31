@@ -16,8 +16,10 @@ pub const SECONDS_PER_HOUR: u32 = 3600;
 pub const SECONDS_PER_MINUTE: u32 = 60;
 pub const ADD_ONE_MINUTE: u32 = 1;
 pub const ADD_ONE_HOUR: u32 = 1;
-const N_PROGRAM_ARGS: usize = 2;
+const MIN_ARGS: usize = 4;
 const MY_NODE_ID_ARG_POS: usize = 1;
+const TRANSACTION_SIZE_ARG_POS: usize = 2;
+const N_TRANSACTIONS_ARG_POS: usize = 3;
 const NODES_FILENAME: &str = "./shared/nodes.csv";
 const PUBLIC_KEYS_FILENAME: &str = "./shared/public_keys.toml";
 const PUBLIC_KEYS_FILE_INDEX: &str = "public_key";
@@ -25,19 +27,24 @@ const PRIVATE_KEY_ENV: &str = "PRIVATE_KEY_";
 
 
 pub fn get_environment(args: Vec<String>) -> Result<Environment, Box<dyn Error>> {
-    if args.len() < N_PROGRAM_ARGS {
-        return Err("Specify Node Id and alternatively protocol (probabilistic) and test execution mode (test)".into());
+    if args.len() < MIN_ARGS {
+        return Err("Usage: simplex [my_node_id] [transaction_size] [number of transactions] [protocol_mode: optional] [test_flag: optional]".into());
     }
 
     let my_id = args[MY_NODE_ID_ARG_POS].parse::<u32>()?;
+    let transaction_size = args[TRANSACTION_SIZE_ARG_POS].parse::<usize>()?;
+    let n_transactions = args[N_TRANSACTIONS_ARG_POS].parse::<usize>()?;
+    let test_flag = args.iter().any(|arg| arg == "test");
     let nodes = read_nodes_from_csv(NODES_FILENAME)?;
-    let test_mode = args.iter().any(|arg| arg == "test");
+    let my_node = nodes.iter().find(|node| node.id == my_id).ok_or("This process' node was not found")?.clone();
 
-    let my_node = nodes.iter().find(|node| node.id == my_id)
-        .ok_or("This process' node was not found")?
-        .clone();
-
-    Ok(Environment { my_node, nodes, test_flag: test_mode })
+    Ok(Environment {
+        my_node,
+        nodes,
+        test_flag,
+        transaction_size,
+        n_transactions,
+    })
 }
 
 pub fn read_nodes_from_csv(file_path: &str) -> Result<Vec<Node>, Box<dyn Error>> {

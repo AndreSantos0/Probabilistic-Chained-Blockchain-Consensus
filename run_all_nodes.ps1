@@ -1,3 +1,9 @@
+param (
+    [int]$transaction_size,
+    [int]$n_transactions,
+    [string[]]$modes
+)
+
 # Define the path to the CSV file
 $csvPath = "./shared/nodes.csv"
 
@@ -7,14 +13,25 @@ if (-not (Test-Path $csvPath)) {
     exit 1
 }
 
-# Parse all provided arguments to check for "prob" and/or "test"
-$useProb = $args -contains "prob"
-$useTest = $args -contains "test"
+# Validate required numeric parameters
+if (-not $transaction_size -or -not $n_transactions) {
+    Write-Host "Error: Both -transaction_size and -n_transactions parameters are required."
+    Write-Host "Usage: .\start_nodes.ps1 -transaction_size <int> -n_transactions <int> -modes <'prob','test'>"
+    exit 1
+}
 
-# Validate that no unknown arguments were passed
-foreach ($arg in $args) {
-    if ($arg -ne "prob" -and $arg -ne "test") {
-        Write-Host "Unknown mode: '$arg'. Supported modes are 'prob', 'test', or both."
+# Parse modes
+$validModes = @("prob", "test")
+$useProb = $false
+$useTest = $false
+
+foreach ($mode in $modes) {
+    if ($mode -eq "prob") {
+        $useProb = $true
+    } elseif ($mode -eq "test") {
+        $useTest = $true
+    } else {
+        Write-Host "Unknown mode: '$mode'. Supported modes are 'prob' and 'test'."
         exit 1
     }
 }
@@ -23,7 +40,6 @@ foreach ($arg in $args) {
 $lines = Get-Content $csvPath | Select-Object -Skip 1
 
 foreach ($line in $lines) {
-    # Split each line into components
     $parts = $line -split ","
     $id = $parts[0].Trim()
     $hostname = $parts[1].Trim()
@@ -31,8 +47,7 @@ foreach ($line in $lines) {
 
     Write-Host "Starting node ${id} on ${hostname}:${port}..."
 
-    # Build the argument list for cargo run
-    $argsList = @("run", "--package", "simplex", "--bin", "simplex", $id)
+    $argsList = @("run", "--package", "simplex", "--bin", "simplex", $id, $transaction_size, $n_transactions)
 
     if ($useProb) {
         $argsList += "probabilistic"
@@ -41,7 +56,6 @@ foreach ($line in $lines) {
         $argsList += "test"
     }
 
-    # Start the process
     Start-Process "cargo" -ArgumentList $argsList
 }
 

@@ -1,6 +1,6 @@
 use crate::block::{NodeId, NotarizedBlock, SimplexBlock, SimplexBlockHeader, VoteSignature};
 use crate::blockchain::Blockchain;
-use crate::connection::{broadcast, generate_nonce, notify, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
+use crate::connection::{broadcast, generate_nonce, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
 use crate::message::{Dispatch, Finalize, PracticalSimplexMessage, Propose, Reply, Request, SimplexMessage, Timeout, View, Vote};
 use crate::protocol::Protocol;
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey};
@@ -40,6 +40,8 @@ impl Protocol for PracticalSimplex {
     fn new(environment: Environment, public_keys: HashMap<u32, UnparsedPublicKey<Vec<u8>>>, private_key: Ed25519KeyPair) -> Self {
         let my_node_id = environment.my_node.id;
         let n = environment.nodes.len();
+        let transaction_size = environment.transaction_size;
+        let n_transactions = environment.n_transactions;
         PracticalSimplex {
             environment,
             quorum_size: n * 2 / 3 + 1,
@@ -50,7 +52,7 @@ impl Protocol for PracticalSimplex {
             timeouts: HashMap::new(),
             finalizes: HashMap::new(),
             blockchain: Blockchain::new(my_node_id),
-            transaction_generator: TransactionGenerator::new(Self::TRANSACTION_SIZE),
+            transaction_generator: TransactionGenerator::new(transaction_size, n_transactions),
             public_keys,
             private_key
         }
@@ -83,19 +85,21 @@ impl Protocol for PracticalSimplex {
     async fn connect(&self, message_queue_sender: Sender<(NodeId, PracticalSimplexMessage)>, listener: TcpListener) -> Vec<Option<TcpStream>> {
         let mut connections = Vec::new();
         for node in self.environment.nodes.iter() {
-            let address = format!("{}:{}", node.host, node.port);
-            let mut stream = TcpStream::connect(address).await.expect(&format!("[Node {}] Failed to connect to Node {}", self.environment.my_node.id, node.id));
-            let node_id_bytes = self.environment.my_node.id.to_be_bytes();
-            let nonce = generate_nonce();
-            let signature = self.private_key.sign(&nonce);
-            stream.write_all(&node_id_bytes).await.expect(&format!("[Node {}] Failed writing during handshake to Node {}", self.environment.my_node.id, node.id));
-            stream.write_all(&nonce).await.expect(&format!("[Node {}] Failed writing during handshake to Node {}", self.environment.my_node.id, node.id));
-            stream.write_all((&signature).as_ref()).await.expect(&format!("[Node {}] Failed writing during handshake to Node {}", self.environment.my_node.id, node.id));
-            connections.push(Some(stream));
+            if node.id != self.environment.my_node.id {
+                let address = format!("{}:{}", node.host, node.port);
+                let mut stream = TcpStream::connect(address).await.expect(&format!("[Node {}] Failed to connect to Node {}", self.environment.my_node.id, node.id));
+                let node_id_bytes = self.environment.my_node.id.to_be_bytes();
+                let nonce = generate_nonce();
+                let signature = self.private_key.sign(&nonce);
+                stream.write_all(&node_id_bytes).await.expect(&format!("[Node {}] Failed writing during handshake to Node {}", self.environment.my_node.id, node.id));
+                stream.write_all(&nonce).await.expect(&format!("[Node {}] Failed writing during handshake to Node {}", self.environment.my_node.id, node.id));
+                stream.write_all((&signature).as_ref()).await.expect(&format!("[Node {}] Failed writing during handshake to Node {}", self.environment.my_node.id, node.id));
+                connections.push(Some(stream));
+            }
         }
 
         let mut accepted = 0;
-        while accepted != self.environment.nodes.len() {
+        while accepted != self.environment.nodes.len() - 1 {
             let (mut stream, _) = listener.accept().await.expect(&format!("[Node {}] Failed accepting incoming connection", self.environment.my_node.id));
             let mut id_buf = [0u8; 4];
             stream.read_exact(&mut id_buf).await.expect(&format!("[Node {}] Failed reading during handshake", self.environment.my_node.id));
@@ -176,14 +180,20 @@ impl Protocol for PracticalSimplex {
         let _ = dispatcher_queue_sender.send(Dispatch::View(notarized.block, notarized.signatures)).await;
     }
 
-    async fn start_message_dispatcher(&self, mut dispatcher_queue_receiver: Receiver<Dispatch>, mut connections: Vec<Option<TcpStream>>) {
+    async fn start_message_dispatcher(
+        &self,
+        message_queue_sender: &Sender<(NodeId, PracticalSimplexMessage)>,
+        mut dispatcher_queue_receiver: Receiver<Dispatch>,
+        mut connections: Vec<Option<TcpStream>>
+    ) {
         let my_node_id = self.environment.my_node.id;
         let private_key = get_private_key(my_node_id);
         let enable_crypto = !self.environment.test_flag;
+        let message_queue_sender = message_queue_sender.clone();
         tokio::spawn(async move {
             loop {
                 if let Some(message) = dispatcher_queue_receiver.recv().await {
-                    Self::dispatch_message(message, &private_key, enable_crypto, my_node_id, &mut connections).await;
+                    Self::dispatch_message(&message_queue_sender, message, &private_key, enable_crypto, my_node_id, &mut connections).await;
                 }
             }
         });
@@ -192,11 +202,19 @@ impl Protocol for PracticalSimplex {
 
 impl PracticalSimplex {
 
-    async fn dispatch_message(content: Dispatch, private_key: &Ed25519KeyPair, enable_crypto: bool, my_node_id: u32, connections: &mut Vec<Option<TcpStream>>) {
+    async fn dispatch_message(
+        message_queue_sender: &Sender<(NodeId, PracticalSimplexMessage)>,
+        content: Dispatch,
+        private_key: &Ed25519KeyPair,
+        enable_crypto: bool,
+        my_node_id: u32,
+        connections: &mut Vec<Option<TcpStream>>
+    ) {
         match content {
             Dispatch::Propose(block) => {
                 let propose = PracticalSimplexMessage::Propose(Propose { content: block });
-                broadcast(private_key, connections, propose, enable_crypto).await;
+                broadcast(private_key, connections, &propose, enable_crypto).await;
+                let _ = message_queue_sender.send((my_node_id, propose)).await;
             }
             Dispatch::Vote(iteration, header) => {
                 let signature = if !enable_crypto {
@@ -211,27 +229,30 @@ impl PracticalSimplex {
                     header,
                     signature
                 });
-                broadcast(private_key, connections, vote, enable_crypto).await;
+                broadcast(private_key, connections, &vote, enable_crypto).await;
+                let _ = message_queue_sender.send((my_node_id, vote)).await;
             }
             Dispatch::Timeout(next_iter) => {
                 let timeout = PracticalSimplexMessage::Timeout(Timeout { next_iter });
-                broadcast(private_key, connections, timeout, enable_crypto).await;
+                broadcast(private_key, connections, &timeout, enable_crypto).await;
+                let _ = message_queue_sender.send((my_node_id, timeout)).await;
             }
             Dispatch::Finalize(iter) => {
                 let finalize = PracticalSimplexMessage::Finalize(Finalize { iter });
-                broadcast(private_key, connections, finalize, enable_crypto).await;
+                broadcast(private_key, connections, &finalize, enable_crypto).await;
+                let _ = message_queue_sender.send((my_node_id, finalize)).await;
             }
             Dispatch::View(header, cert) => {
                 let view = PracticalSimplexMessage::View(View { last_notarized_block_header: header, last_notarized_block_cert: cert });
-                notify(private_key, connections, view, my_node_id, enable_crypto).await;
+                broadcast(private_key, connections, &view, enable_crypto).await;
             }
             Dispatch::Request(last_notarized_length, sender) => {
                 let request = PracticalSimplexMessage::Request(Request { last_notarized_length });
-                unicast(private_key, connections, request, sender, enable_crypto).await;
+                unicast(private_key, connections, &request, sender, my_node_id, enable_crypto).await;
             }
             Dispatch::Reply(blocks, sender) => {
                 let reply = PracticalSimplexMessage::Reply(Reply { blocks });
-                unicast(private_key, connections, reply, sender, enable_crypto).await;
+                unicast(private_key, connections, &reply, sender, my_node_id, enable_crypto).await;
             }
             _ => {}
         }
@@ -405,7 +426,7 @@ impl PracticalSimplex {
         dispatcher_queue_sender: &Sender<Dispatch>,
         reset_timer_sender: &Sender<()>,
     ) {
-        info!("Received vote {}", vote.iteration);
+        info!("Received vote {} from {}", vote.iteration, sender);
         let vote_signatures = self.votes.entry(vote.header).or_insert_with(Vec::new);
         let is_first_vote = !vote_signatures.iter().any(|vote_signature| vote_signature.node == sender);
         if is_first_vote {
@@ -462,7 +483,7 @@ impl PracticalSimplex {
     }
 
     async fn handle_finalize(&mut self, finalize: Finalize, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
-        info!("Received finalize {}", finalize.iter);
+        info!("Received finalize {} from {}", finalize.iter, sender);
         let finalizes = self.finalizes.entry(finalize.iter).or_insert_with(Vec::new);
         let is_first_finalize = !finalizes.iter().any(|node_id| *node_id == sender);
         if is_first_finalize {

@@ -49,8 +49,8 @@ pub trait Protocol {
                 let (dispatcher_queue_sender, dispatcher_queue_receiver) = mpsc::channel::<Dispatch>(Self::MESSAGE_CHANNEL_SIZE);
                 let (reset_timer_sender, reset_timer_receiver) = mpsc::channel::<()>(Self::RESET_TIMER_CHANNEL_SIZE);
                 sleep(Duration::from_secs(Self::SOCKET_BINDING_DELAY)).await;
-                let connections = self.connect(consumer_queue_sender, listener).await;
-                self.start_message_dispatcher(dispatcher_queue_receiver, connections).await;
+                let connections = self.connect(consumer_queue_sender.clone(), listener).await;
+                self.start_message_dispatcher(&consumer_queue_sender, dispatcher_queue_receiver, connections).await;
                 self.start_iteration_timer(dispatcher_queue_sender.clone(), reset_timer_receiver).await;
                 self.execute_protocol(consumer_queue_receiver, dispatcher_queue_sender, reset_timer_sender).await;
             }
@@ -170,5 +170,5 @@ pub trait Protocol {
     fn clear_timeouts(&mut self, iteration: u32);
     async fn handle_message(&mut self, sender: u32, message: Self::Message, dispatcher_queue_sender: &Sender<Dispatch>, reset_timer_sender: &Sender<()>);
     async fn post_notarization(&self, _notarized: NotarizedBlock, _dispatcher_queue_sender: &Sender<Dispatch>) {}
-    async fn start_message_dispatcher(&self, dispatcher_queue_receiver: Receiver<Dispatch>, connections: Vec<Option<TcpStream>>);
+    async fn start_message_dispatcher(&self, message_queue_sender: &Sender<(NodeId, Self::Message)>, dispatcher_queue_receiver: Receiver<Dispatch>, connections: Vec<Option<TcpStream>>);
 }
