@@ -307,34 +307,6 @@ impl PracticalSimplex {
                 }
 
                 match &message {
-                    PracticalSimplexMessage::View(view) => {
-                        if view.last_notarized_block_cert.len() >= quorum_size {
-                            let serialized_message = match serialize(&view.last_notarized_block_header) {
-                                Ok(msg) => msg,
-                                Err(_) => {
-                                    error!("[Node {}] Failed to deserialize vote signature header", my_node_id);
-                                   continue;
-                                }
-                            };
-                            let all_verified = view.last_notarized_block_cert
-                                .par_iter()
-                                .map(|vote_signature| {
-                                    if let Some(key) = public_keys.get(&vote_signature.node) {
-                                        match key.verify(&serialized_message, vote_signature.signature.as_ref()) {
-                                            Ok(_) => true,
-                                            Err(_) => {
-                                                warn!("[Node {}] Failed to verify vote signature header during view", my_node_id);
-                                                false
-                                            }
-                                        }
-                                    } else {
-                                        false
-                                    }
-                                })
-                                .all(|verified| verified);
-                            if !all_verified { continue }
-                        }
-                    }
                     PracticalSimplexMessage::Reply(reply) => {
                         if reply.blocks.is_empty() { continue }
                         for notarized in &reply.blocks {
@@ -509,7 +481,31 @@ impl PracticalSimplex {
         dispatcher_queue_sender: &Sender<Dispatch>,
     ) {
         info!("Received view {}", view.last_notarized_block_header.length);
-        if self.blockchain.is_missing(view.last_notarized_block_header.length, view.last_notarized_block_header.iteration) {
+        if self.blockchain.is_missing(view.last_notarized_block_header.length, view.last_notarized_block_header.iteration) && view.last_notarized_block_cert.len() >= self.quorum_size {
+            let serialized_message = match serialize(&view.last_notarized_block_header) {
+                Ok(msg) => msg,
+                Err(_) => {
+                    error!("[Node {}] Failed to deserialize vote signature header", self.environment.my_node.id);
+                    return;
+                }
+            };
+            let all_verified = view.last_notarized_block_cert
+                .par_iter()
+                .map(|vote_signature| {
+                    if let Some(key) = self.public_keys.get(&vote_signature.node) {
+                        match key.verify(&serialized_message, vote_signature.signature.as_ref()) {
+                            Ok(_) => true,
+                            Err(_) => {
+                                warn!("[Node {}] Failed to verify vote signature header during view", self.environment.my_node.id);
+                                false
+                            }
+                        }
+                    } else {
+                        false
+                    }
+                })
+                .all(|verified| verified);
+            if !all_verified { return; }
             self.request(sender, dispatcher_queue_sender).await;
         }
     }
