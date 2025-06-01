@@ -150,7 +150,6 @@ impl Blockchain {
 
         let blocks_finalized = blocks_to_be_finalized.len();
 
-        /*
         let node_id = self.my_node_id;
         tokio::spawn(async move {
             let mut file = OpenOptions::new()
@@ -168,10 +167,9 @@ impl Blockchain {
             .join("");
             file.write_all(block_data.as_bytes()).await.expect("Error writing blocks to file");
         });
-         */
 
         self.finalized_height = iteration;
-        //self.notarized.retain(|notarized| notarized.block.iteration >= iteration);
+        self.notarized.retain(|notarized| notarized.block.iteration >= iteration);
         blocks_finalized
     }
 
