@@ -366,8 +366,8 @@ impl PracticalSimplex {
         let leader = Self::get_leader(self.environment.nodes.len(), propose.content.iteration);
         if !self.proposes.contains_key(&propose.content.iteration) && sender == leader {
             self.proposes.insert(propose.content.iteration, propose.clone());
-            let iteration = self.iteration.load(Ordering::Acquire);
-            if iteration == propose.content.iteration && !self.is_timeout.load(Ordering::SeqCst) && self.blockchain.is_extendable(&propose.content) {
+            let iteration = self.iteration.load(Ordering::SeqCst);
+            if iteration == propose.content.iteration && !self.is_timeout.load(Ordering::Acquire) && self.blockchain.is_extendable(&propose.content) {
                 let block = SimplexBlockHeader::from(&propose.content);
                 let vote = Self::create_vote(iteration, block);
                 let _ = dispatcher_queue_sender.send(vote).await;
@@ -377,13 +377,13 @@ impl PracticalSimplex {
                 let votes = self.votes.get(&block);
                 if let Some(vote_signatures) = votes {
                     if vote_signatures.len() >= self.quorum_size {
-                        let is_timeout = self.is_timeout.load(Ordering::SeqCst);
+                        let is_timeout = self.is_timeout.load(Ordering::Acquire);
                         self.blockchain.notarize(
                             block.clone(),
                             propose.content.transactions,
                             vote_signatures.to_vec()
                         ).await;
-                        self.iteration.fetch_add(1, Ordering::AcqRel);
+                        self.iteration.fetch_add(1, Ordering::SeqCst);
                         if !is_timeout {
                             let finalize = Self::create_finalize(iteration);
                             let _ = dispatcher_queue_sender.send(finalize).await;
@@ -411,19 +411,19 @@ impl PracticalSimplex {
         if is_first_vote {
             vote_signatures.push(VoteSignature { signature: vote.signature, node: sender });
             info!("{} signatures", vote_signatures.len());
-            let iteration = self.iteration.load(Ordering::Acquire);
+            let iteration = self.iteration.load(Ordering::SeqCst);
             if vote_signatures.len() == self.quorum_size {
                 match self.proposes.get(&vote.iteration) {
                     None => return,
                     Some(block) => {
-                        let is_timeout = self.is_timeout.load(Ordering::SeqCst);
+                        let is_timeout = self.is_timeout.load(Ordering::Acquire);
                         if vote.iteration == iteration {
                             self.blockchain.notarize(
                                 SimplexBlockHeader::from(&block.content),
                                 block.content.transactions.clone(),
                                 vote_signatures.to_vec()
                             ).await;
-                            self.iteration.fetch_add(1, Ordering::AcqRel);
+                            self.iteration.fetch_add(1, Ordering::SeqCst);
                             if !is_timeout {
                                 let finalize = Self::create_finalize(iteration);
                                 let _ = dispatcher_queue_sender.send(finalize).await;
@@ -453,8 +453,8 @@ impl PracticalSimplex {
         if is_first_timeout {
             timeouts.push(sender);
             info!("{} matching timeouts for iter {}", timeouts.len(), timeout.next_iter);
-            if timeouts.len() == self.quorum_size && timeout.next_iter == self.iteration.load(Ordering::Acquire) + 1 {
-                self.iteration.store(timeout.next_iter, Ordering::Release);
+            if timeouts.len() == self.quorum_size && timeout.next_iter == self.iteration.load(Ordering::SeqCst) + 1 {
+                self.iteration.store(timeout.next_iter, Ordering::SeqCst);
                 self.handle_iteration_advance(dispatcher_queue_sender).await;
                 let _ = reset_timer_sender.send(()).await;
             }
@@ -533,13 +533,13 @@ impl PracticalSimplex {
         let mut is_reset = false;
         for notarized in reply.blocks {
             if self.blockchain.is_missing(notarized.block.length, notarized.block.iteration) {
-                let iteration = self.iteration.load(Ordering::Acquire);
+                let iteration = self.iteration.load(Ordering::SeqCst);
                 if let Some(_) = self.blockchain.find_parent_block(&notarized.block.hash) {
                     self.blockchain.notarize(notarized.block.clone(), notarized.transactions.clone(), notarized.signatures.clone()).await;
                     if notarized.block.iteration == iteration {
                         is_reset = true;
-                        self.iteration.swap(notarized.block.iteration + 1, Ordering::AcqRel);
-                        if !self.is_timeout.load(Ordering::SeqCst) {
+                        self.iteration.swap(notarized.block.iteration + 1, Ordering::SeqCst);
+                        if !self.is_timeout.load(Ordering::Acquire) {
                             let finalize = Self::create_finalize(iteration);
                             let _ = dispatcher_queue_sender.send(finalize).await;
                         }

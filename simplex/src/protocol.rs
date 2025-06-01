@@ -69,7 +69,7 @@ pub trait Protocol {
                 tokio::select! {
                     _ = timer.tick() => {
                         if iteration == iteration_counter.load(Ordering::SeqCst) {
-                            is_timeout.store(true, Ordering::SeqCst);
+                            is_timeout.store(true, Ordering::Release);
                             let timeout = Self::create_timeout(iteration + 1);
                             let _ = dispatcher_queue_sender.send(timeout).await;
                             reset_timer_receiver.recv().await;
@@ -98,7 +98,7 @@ pub trait Protocol {
         loop {
             let iteration = self.get_iteration().load(Ordering::SeqCst);
             let leader = Self::get_leader(self.get_environment().nodes.len(), iteration);
-            self.get_is_timeout().store(false, Ordering::SeqCst);
+            self.get_is_timeout().store(false, Ordering::Release);
             self.clear_timeouts(iteration);
             info!("----------------------");
             info!("----------------------");
