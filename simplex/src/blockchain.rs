@@ -171,7 +171,7 @@ impl Blockchain {
          */
 
         self.finalized_height = iteration;
-        self.notarized.retain(|notarized| notarized.block.iteration >= iteration);
+        //self.notarized.retain(|notarized| notarized.block.iteration >= iteration);
         blocks_finalized
     }
 

@@ -9,8 +9,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use log::{error, info};
-use signal_hook::consts::{SIGINT, SIGTERM};
-use signal_hook_tokio::Signals;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -38,23 +36,12 @@ pub trait Protocol {
     fn get_blockchain(&mut self) -> &mut Blockchain;
     fn get_transaction_generator(&mut self) -> &mut TransactionGenerator;
     fn get_quorum_size(&self) -> usize;
-    fn get_finalized_blocks(&self) -> &Arc<AtomicU32>;
+    fn get_finalized_blocks(&self) -> u32;
 
     async fn start(&mut self)
     where
         Self: Sized, <Self as Protocol>::Message: 'static
     {
-        let blocks_finalized = self.get_finalized_blocks().clone();
-        tokio::spawn(async move {
-            let mut signals = Signals::new([SIGTERM, SIGINT]).unwrap();
-            while let Some(signal) = signals.next().await {
-                if signal == SIGTERM || signal == SIGINT {
-                    let value = blocks_finalized.load(Ordering::Relaxed);
-                    println!("{}", value);
-                }
-            }
-        });
-
         let address = format!("{}:{}", self.get_environment().my_node.host, self.get_environment().my_node.port);
         match TcpListener::bind(address).await {
             Ok(listener) => {
@@ -165,12 +152,15 @@ pub trait Protocol {
     where
         Self: Sized,
     {
+        let start = tokio::time::Instant::now();
         self.handle_iteration_advance(&dispatcher_queue_sender).await;
-        loop {
+        while start.elapsed() < Duration::from_secs(60) {
             if let Some((sender, message)) = consumer_queue_receiver.recv().await {
                 self.handle_message(sender, message, &dispatcher_queue_sender, &reset_timer_sender).await;
             }
         }
+        println!("{} blocks finalized", self.get_finalized_blocks());
+        std::process::exit(0);
     }
 
     async fn connect(&self, message_queue_sender: Sender<(NodeId, Self::Message)>, listener: TcpListener) -> Vec<Option<TcpStream>>;

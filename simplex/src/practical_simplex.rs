@@ -18,12 +18,13 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender};
 use shared::initializer::get_private_key;
 
+
 pub struct PracticalSimplex {
     environment: Environment,
     quorum_size: usize,
     iteration: Arc<AtomicU32>,
     is_timeout: Arc<AtomicBool>,
-    blocks_finalized: Arc<AtomicU32>,
+    blocks_finalized: u32,
     proposes: HashMap<u32, Propose>,
     votes: HashMap<SimplexBlockHeader, Vec<VoteSignature>>,
     timeouts: HashMap<u32, Vec<u32>>,
@@ -48,7 +49,7 @@ impl Protocol for PracticalSimplex {
             quorum_size: n * 2 / 3 + 1,
             iteration: Arc::new(AtomicU32::new(Self::INITIAL_ITERATION)),
             is_timeout: Arc::new(AtomicBool::new(false)),
-            blocks_finalized: Arc::new(AtomicU32::new(0)),
+            blocks_finalized: 0,
             proposes: HashMap::new(),
             votes: HashMap::new(),
             timeouts: HashMap::new(),
@@ -84,8 +85,8 @@ impl Protocol for PracticalSimplex {
         self.quorum_size
     }
 
-    fn get_finalized_blocks(&self) -> &Arc<AtomicU32> {
-        &self.blocks_finalized
+    fn get_finalized_blocks(&self) -> u32 {
+        self.blocks_finalized
     }
 
     async fn connect(&self, message_queue_sender: Sender<(NodeId, PracticalSimplexMessage)>, listener: TcpListener) -> Vec<Option<TcpStream>> {
@@ -469,7 +470,7 @@ impl PracticalSimplex {
             if finalizes.len() == self.quorum_size {
                 if let Some(_) = self.blockchain.get_block(finalize.iter) {
                     let blocks_finalized = self.blockchain.finalize(finalize.iter).await;
-                    self.blocks_finalized.fetch_add(blocks_finalized as u32, Ordering::SeqCst);
+                    self.blocks_finalized += blocks_finalized as u32;
                     self.proposes.retain(|iteration, _| *iteration > finalize.iter);
                     self.votes.retain(|_, signatures| signatures.len() < self.environment.nodes.len() * 2 / 3 + 1);
                     self.finalizes.retain(|iteration, _| *iteration > finalize.iter);
