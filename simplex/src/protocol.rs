@@ -65,7 +65,7 @@ pub trait Protocol {
         timer.tick().await;
         tokio::spawn(async move {
             loop {
-                let iteration = iteration_counter.load(Ordering::SeqCst);
+                let iteration = iteration_counter.load(Ordering::Acquire);
                 tokio::select! {
                     _ = timer.tick() => {
                         if iteration == iteration_counter.load(Ordering::SeqCst) {
