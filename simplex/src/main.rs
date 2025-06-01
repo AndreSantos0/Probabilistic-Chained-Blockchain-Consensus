@@ -32,9 +32,9 @@ async fn main() {
     match get_environment(args) {
         Ok(env) => {
             info!("Successfully read environment: {:?}", env);
-            if env.my_node.id == 0 {
-                console_subscriber::init();
-            }
+            //if env.my_node.id == 0 {
+            //    console_subscriber::init();
+            //}
             let public_keys = get_public_keys();
             let private_key = get_private_key(env.my_node.id);
             match protocol_mode {
