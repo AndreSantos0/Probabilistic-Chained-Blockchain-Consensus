@@ -59,7 +59,7 @@ while read -r node; do
     cd $REMOTE_DIR || { echo '❌ Repo dir not found'; exit 1; }
     rm -f FinalizedBlocks_$node_id.ndjson
     source \$HOME/.cargo/env
-    timeout 65s cargo run --package simplex --bin simplex $node_id ${ARGS[*]}
+    timeout 65s cargo run --package simplex --bin simplex $node_id ${ARGS[*]} > /tmp/simplex_$node_id.log 2>&1
   " &
 
   pids+=($!)

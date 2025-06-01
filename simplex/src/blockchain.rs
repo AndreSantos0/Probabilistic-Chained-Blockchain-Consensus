@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use bincode::serialize;
 use log::info;
 use crate::block::{SimplexBlockHeader, NotarizedBlock, SimplexBlock, VoteSignature};
@@ -131,7 +133,7 @@ impl Blockchain {
         self.to_be_finalized.push(iteration);
     }
 
-    pub async fn finalize(&mut self, iteration: u32) {
+    pub async fn finalize(&mut self, iteration: u32) -> usize {
         let blocks: Vec<NotarizedBlock> = self.notarized.iter()
             .filter(|notarized| notarized.block.iteration <= iteration && notarized.block.iteration > self.finalized_height)
             .cloned()
@@ -146,6 +148,9 @@ impl Blockchain {
             }
         }
 
+        let blocks_finalized = blocks_to_be_finalized.len();
+
+        /*
         let node_id = self.my_node_id;
         tokio::spawn(async move {
             let mut file = OpenOptions::new()
@@ -163,9 +168,11 @@ impl Blockchain {
             .join("");
             file.write_all(block_data.as_bytes()).await.expect("Error writing blocks to file");
         });
+         */
 
         self.finalized_height = iteration;
         self.notarized.retain(|notarized| notarized.block.iteration >= iteration);
+        blocks_finalized
     }
 
     pub fn print(&self) {

@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use log::{error, info};
+use signal_hook::consts::{SIGINT, SIGTERM};
+use signal_hook_tokio::Signals;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -26,7 +28,6 @@ pub trait Protocol {
     const MESSAGE_CHANNEL_SIZE: usize = 1000;
     const RESET_TIMER_CHANNEL_SIZE: usize = 100;
     const SOCKET_BINDING_DELAY: u64 = 5;
-    const TRANSACTION_SIZE: usize = 242;
 
     type Message: SimplexMessage;
 
@@ -37,11 +38,23 @@ pub trait Protocol {
     fn get_blockchain(&mut self) -> &mut Blockchain;
     fn get_transaction_generator(&mut self) -> &mut TransactionGenerator;
     fn get_quorum_size(&self) -> usize;
+    fn get_finalized_blocks(&self) -> &Arc<AtomicU32>;
 
     async fn start(&mut self)
     where
         Self: Sized, <Self as Protocol>::Message: 'static
     {
+        let blocks_finalized = self.get_finalized_blocks().clone();
+        tokio::spawn(async move {
+            let mut signals = Signals::new([SIGTERM, SIGINT]).unwrap();
+            while let Some(signal) = signals.next().await {
+                if signal == SIGTERM || signal == SIGINT {
+                    let value = blocks_finalized.load(Ordering::Relaxed);
+                    println!("{}", value);
+                }
+            }
+        });
+
         let address = format!("{}:{}", self.get_environment().my_node.host, self.get_environment().my_node.port);
         match TcpListener::bind(address).await {
             Ok(listener) => {
@@ -103,7 +116,7 @@ pub trait Protocol {
             info!("----------------------");
             info!("----------------------");
             info!("Leader is node {} | Iteration: {}", leader, iteration);
-            self.get_blockchain().print();
+            //self.get_blockchain().print();
 
             let my_node_id = self.get_environment().my_node.id;
             if leader == my_node_id {
