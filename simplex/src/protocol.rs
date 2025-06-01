@@ -68,7 +68,7 @@ pub trait Protocol {
                 let iteration = iteration_counter.load(Ordering::Acquire);
                 tokio::select! {
                     _ = timer.tick() => {
-                        if iteration == iteration_counter.load(Ordering::SeqCst) {
+                        if iteration == iteration_counter.load(Ordering::Acquire) {
                             is_timeout.store(true, Ordering::Release);
                             let timeout = Self::create_timeout(iteration + 1);
                             let _ = dispatcher_queue_sender.send(timeout).await;
