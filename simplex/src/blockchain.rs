@@ -1,5 +1,3 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use bincode::serialize;
 use log::info;
 use crate::block::{SimplexBlockHeader, NotarizedBlock, SimplexBlock, VoteSignature};
@@ -102,12 +100,12 @@ impl Blockchain {
 
     pub async fn get_missing(&self, from_length: u32, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
         let dispatcher_queue_sender = dispatcher_queue_sender.clone();
-        let last = self.last_notarized().clone();
+        let last_length = self.last_notarized().block.length;
         let notarized = self.notarized.clone();
         let node_id = self.my_node_id;
         tokio::spawn(async move {
             let mut missing = Vec::new();
-            for curr_length in from_length ..= last.block.length {
+            for curr_length in from_length ..= last_length {
                 let mut blocks: Vec<NotarizedBlock> = notarized.iter().filter(|notarized| notarized.block.length == curr_length).cloned().collect();
                 if blocks.is_empty() && curr_length != GENESIS_LENGTH {
                     match get_finalized_block(node_id, curr_length).await {
@@ -134,22 +132,20 @@ impl Blockchain {
     }
 
     pub async fn finalize(&mut self, iteration: u32) -> usize {
-        let blocks: Vec<NotarizedBlock> = self.notarized.iter()
-            .filter(|notarized| notarized.block.iteration <= iteration && notarized.block.iteration > self.finalized_height)
-            .cloned()
-            .collect();
-
-        let mut blocks_to_be_finalized: Vec<NotarizedBlock> = Vec::new();
+        let mut blocks_to_be_finalized = Vec::new();
         let mut last_parent_hash = None;
-        for notarized in blocks.iter().rev() {
-            if last_parent_hash == Some(Self::hash(notarized)) || last_parent_hash.is_none() {
-                last_parent_hash = notarized.block.hash.clone();
-                blocks_to_be_finalized.push(notarized.clone());
+
+        for notarized in self.notarized.iter().rev() {
+            if notarized.block.iteration <= iteration && notarized.block.iteration > self.finalized_height {
+                let hash = Self::hash(notarized);
+                if last_parent_hash == Some(hash) || last_parent_hash.is_none() {
+                    last_parent_hash = notarized.block.hash.clone();
+                    blocks_to_be_finalized.push(notarized.clone());
+                }
             }
         }
 
         let blocks_finalized = blocks_to_be_finalized.len();
-
         let node_id = self.my_node_id;
         tokio::spawn(async move {
             let mut file = OpenOptions::new()

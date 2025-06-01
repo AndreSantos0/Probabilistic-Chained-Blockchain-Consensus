@@ -1,4 +1,4 @@
-use crate::block::{NodeId, NotarizedBlock, SimplexBlock, SimplexBlockHeader, VoteSignature};
+use crate::block::{NodeId, SimplexBlock, SimplexBlockHeader, VoteSignature};
 use crate::blockchain::Blockchain;
 use crate::connection::{broadcast, generate_nonce, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
 use crate::message::{Dispatch, Finalize, PracticalSimplexMessage, Propose, Reply, Request, SimplexMessage, Timeout, View, Vote};
@@ -73,20 +73,56 @@ impl Protocol for PracticalSimplex {
         &self.is_timeout
     }
 
-    fn get_blockchain(&mut self) -> &mut Blockchain {
-        &mut self.blockchain
-    }
-
-    fn get_transaction_generator(&mut self) -> &mut TransactionGenerator {
-        &mut self.transaction_generator
-    }
-
-    fn get_quorum_size(&self) -> usize {
-        self.quorum_size
-    }
-
     fn get_finalized_blocks(&self) -> u32 {
         self.blocks_finalized
+    }
+
+    async fn handle_iteration_advance(&mut self, dispatcher_queue_sender: &Sender<Dispatch>) {
+        loop {
+            let iteration = self.iteration.load(Ordering::Acquire);
+            let leader = Self::get_leader(self.environment.nodes.len(), iteration);
+            self.is_timeout.store(false, Ordering::Release);
+            self.clear_timeouts(iteration);
+            info!("----------------------");
+            info!("----------------------");
+            info!("Leader is node {} | Iteration: {}", leader, iteration);
+            //self.blockchain().print();
+
+            let my_node_id = self.environment.my_node.id;
+            if leader == my_node_id {
+                let transactions = self.transaction_generator.generate();
+                let block = self.blockchain.get_next_block(iteration, transactions);
+                info!("Proposed {}", block.length);
+                let propose = self.create_proposal(block);
+                let _ = dispatcher_queue_sender.send(propose).await;
+            }
+
+            if let Some(propose) = self.get_proposal_block(iteration) {
+                if !self.is_timeout.load(Ordering::Acquire) && self.blockchain.is_extendable(propose) {
+                    let block = SimplexBlockHeader::from(propose);
+                    let vote = Self::create_vote(iteration, block);
+                    let _ = dispatcher_queue_sender.send(vote).await;
+                }
+            }
+
+            if self.get_timeouts(iteration + 1) >= self.quorum_size {
+                self.iteration.store(iteration + 1, Ordering::Release);
+                continue;
+            }
+
+            match self.blockchain.check_for_possible_notarization(iteration) {
+                None => break,
+                Some(notarized) => {
+                    self.blockchain.notarize(notarized.block.clone(), notarized.transactions, notarized.signatures.clone()).await;
+                    self.iteration.fetch_add(1, Ordering::AcqRel);
+                    if !self.is_timeout.load(Ordering::Acquire) {
+                        let finalize = Self::create_finalize(iteration);
+                        let _ = dispatcher_queue_sender.send(finalize).await;
+                    }
+                    let _ = dispatcher_queue_sender.send(Dispatch::View(notarized.block, notarized.signatures)).await;
+                }
+            }
+        }
     }
 
     async fn connect(&self, message_queue_sender: Sender<(NodeId, PracticalSimplexMessage)>, listener: TcpListener) -> Vec<Option<TcpStream>> {
@@ -181,10 +217,6 @@ impl Protocol for PracticalSimplex {
             PracticalSimplexMessage::Request(request) => self.handle_request(request, sender, dispatcher_queue_sender).await,
             PracticalSimplexMessage::Reply(reply) => self.handle_reply(reply, dispatcher_queue_sender, reset_timer_sender).await,
         }
-    }
-
-    async fn post_notarization(&self, notarized: NotarizedBlock, dispatcher_queue_sender: &Sender<Dispatch>) {
-        let _ = dispatcher_queue_sender.send(Dispatch::View(notarized.block, notarized.signatures)).await;
     }
 
     async fn start_message_dispatcher(
@@ -365,7 +397,6 @@ impl PracticalSimplex {
         info!("Received propose {}", propose.content.length);
         let leader = Self::get_leader(self.environment.nodes.len(), propose.content.iteration);
         if !self.proposes.contains_key(&propose.content.iteration) && sender == leader {
-            self.proposes.insert(propose.content.iteration, propose.clone());
             let iteration = self.iteration.load(Ordering::Acquire);
             if iteration == propose.content.iteration && !self.is_timeout.load(Ordering::Acquire) && self.blockchain.is_extendable(&propose.content) {
                 let block = SimplexBlockHeader::from(&propose.content);
@@ -392,9 +423,11 @@ impl PracticalSimplex {
                         let _ = dispatcher_queue_sender.send(view).await;
                         self.handle_iteration_advance(dispatcher_queue_sender).await;
                         let _ = reset_timer_sender.send(()).await;
+                        return;
                     }
                 }
             }
+            self.proposes.insert(propose.content.iteration, propose);
         }
     }
 
@@ -415,12 +448,14 @@ impl PracticalSimplex {
             if vote_signatures.len() == self.quorum_size {
                 match self.proposes.get(&vote.iteration) {
                     None => return,
-                    Some(block) => {
+                    Some(_) => {
+                        let block = self.proposes.remove(&vote.iteration).unwrap();
                         let is_timeout = self.is_timeout.load(Ordering::Acquire);
                         if vote.iteration == iteration {
+                            let header = SimplexBlockHeader::from(&block.content);
                             self.blockchain.notarize(
-                                SimplexBlockHeader::from(&block.content),
-                                block.content.transactions.clone(),
+                                header.clone(),
+                                block.content.transactions,
                                 vote_signatures.to_vec()
                             ).await;
                             self.iteration.fetch_add(1, Ordering::AcqRel);
@@ -428,14 +463,14 @@ impl PracticalSimplex {
                                 let finalize = Self::create_finalize(iteration);
                                 let _ = dispatcher_queue_sender.send(finalize).await;
                             }
-                            let view = Dispatch::View(SimplexBlockHeader::from(&block.content), vote_signatures.to_vec());
+                            let view = Dispatch::View(header, vote_signatures.to_vec());
                             let _ = dispatcher_queue_sender.send(view).await;
                             self.handle_iteration_advance(dispatcher_queue_sender).await;
                             let _ = reset_timer_sender.send(()).await;
                         } else if vote.iteration > iteration {
                             self.blockchain.add_to_be_notarized(
                                 SimplexBlockHeader::from(&block.content),
-                                block.content.transactions.clone(),
+                                block.content.transactions,
                                 vote_signatures.to_vec()
                             );
                             self.request(sender, dispatcher_queue_sender).await;
@@ -535,7 +570,7 @@ impl PracticalSimplex {
             if self.blockchain.is_missing(notarized.block.length, notarized.block.iteration) {
                 let iteration = self.iteration.load(Ordering::Acquire);
                 if let Some(_) = self.blockchain.find_parent_block(&notarized.block.hash) {
-                    self.blockchain.notarize(notarized.block.clone(), notarized.transactions.clone(), notarized.signatures.clone()).await;
+                    self.blockchain.notarize(notarized.block.clone(), notarized.transactions, notarized.signatures.clone()).await;
                     if notarized.block.iteration == iteration {
                         is_reset = true;
                         self.iteration.swap(notarized.block.iteration + 1, Ordering::AcqRel);
