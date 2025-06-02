@@ -81,12 +81,8 @@ pub trait Protocol {
         });
     }
 
-    fn get_leader(n_nodes: usize, iteration: u32) -> u32 {
-        let mut hasher = Sha256::new();
-        hasher.update(&iteration.to_le_bytes());
-        let hash = hasher.finalize();
-        let hash_u64 = u64::from_le_bytes(hash[0..8].try_into().expect("Invalid slice length"));
-        (hash_u64 % n_nodes as u64) as u32
+    fn get_leader(_n_nodes: usize, _iteration: u32) -> u32 {
+       0
     }
 
     async fn handle_iteration_advance(&mut self, dispatcher_queue_sender: &Sender<Dispatch>);
