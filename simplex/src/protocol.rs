@@ -1,7 +1,6 @@
 use crate::block::{SimplexBlockHeader, NodeId, SimplexBlock};
 use crate::message::{Dispatch, SimplexMessage};
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey};
-use sha2::{Digest, Sha256};
 use shared::domain::environment::Environment;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};

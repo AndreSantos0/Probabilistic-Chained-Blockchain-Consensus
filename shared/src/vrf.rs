@@ -37,11 +37,11 @@ pub fn vrf_verify(
     sample_size: usize,
     s: u32,
     leader_id: u32,
-    sample_set: HashSet<u32>,
+    sample_set: &Vec<u32>,
     proof: &[u8],
 ) -> bool {
-    let mut possible_ids: Vec<u32> = (0..s).collect(); // Generate IDs dynamically
-    possible_ids.retain(|&id| id != leader_id); // Remove leader_id from shuffling list
+    let mut possible_ids: Vec<u32> = (0..s).collect();
+    possible_ids.retain(|&id| id != leader_id);
 
     let seed_bytes = seed.as_bytes();
 
@@ -59,5 +59,6 @@ pub fn vrf_verify(
     let mut expected_sample_set: HashSet<u32> = possible_ids.into_iter().take(sample_size - 1).collect();
     expected_sample_set.insert(leader_id);
 
-    sample_set == expected_sample_set
+    let actual_sample_set: HashSet<u32> = sample_set.iter().copied().collect();
+    actual_sample_set == expected_sample_set
 }

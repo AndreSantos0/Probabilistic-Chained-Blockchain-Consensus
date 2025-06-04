@@ -15,11 +15,16 @@ const INITIAL_FINALIZED_HEIGHT: u32 = 0;
 const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks_";
 
 
+pub struct ToBeNotarized {
+    pub block: SimplexBlockHeader,
+    pub signatures: Vec<VoteSignature>,
+}
+
 pub struct Blockchain {
     notarized: Vec<NotarizedBlock>,
     my_node_id: u32,
     to_be_finalized: Vec<u32>,
-    to_be_notarized: Vec<NotarizedBlock>,
+    to_be_notarized: Vec<ToBeNotarized>,
     finalized_height: u32,
 }
 
@@ -59,11 +64,11 @@ impl Blockchain {
         SimplexBlock::new(Some(hash), iteration, last.block.length + 1, transactions)
     }
 
-    pub fn add_to_be_notarized(&mut self, block: SimplexBlockHeader, transactions: Vec<Transaction>, signatures: Vec<VoteSignature>) {
-        self.to_be_notarized.push(NotarizedBlock { block, signatures, transactions })
+    pub fn add_to_be_notarized(&mut self, block: SimplexBlockHeader, signatures: Vec<VoteSignature>) {
+        self.to_be_notarized.push(ToBeNotarized { block, signatures })
     }
 
-    pub fn check_for_possible_notarization(&mut self, iteration: u32) -> Option<NotarizedBlock> {
+    pub fn check_for_possible_notarization(&mut self, iteration: u32) -> Option<ToBeNotarized> {
         if let Some(index) = self.to_be_notarized.iter().position(|notarized| notarized.block.iteration == iteration) {
             return Some(self.to_be_notarized.remove(index));
         }

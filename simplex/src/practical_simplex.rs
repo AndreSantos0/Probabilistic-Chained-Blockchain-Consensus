@@ -113,7 +113,8 @@ impl Protocol for PracticalSimplex {
             match self.blockchain.check_for_possible_notarization(iteration) {
                 None => break,
                 Some(notarized) => {
-                    self.blockchain.notarize(notarized.block.clone(), notarized.transactions, notarized.signatures.clone()).await;
+                    let propose = self.proposes.remove(&iteration).unwrap();
+                    self.blockchain.notarize(notarized.block.clone(), propose.content.transactions, notarized.signatures.clone()).await;
                     self.iteration.fetch_add(1, Ordering::AcqRel);
                     if !self.is_timeout.load(Ordering::Acquire) {
                         let finalize = Self::create_finalize(iteration);
@@ -448,10 +449,10 @@ impl PracticalSimplex {
             if vote_signatures.len() == self.quorum_size {
                 match self.proposes.get(&vote.iteration) {
                     None => return,
-                    Some(_) => {
-                        let block = self.proposes.remove(&vote.iteration).unwrap();
+                    Some(block) => {
                         let is_timeout = self.is_timeout.load(Ordering::Acquire);
                         if vote.iteration == iteration {
+                            let block = self.proposes.remove(&vote.iteration).unwrap();
                             let header = SimplexBlockHeader::from(&block.content);
                             self.blockchain.notarize(
                                 header.clone(),
@@ -470,7 +471,6 @@ impl PracticalSimplex {
                         } else if vote.iteration > iteration {
                             self.blockchain.add_to_be_notarized(
                                 SimplexBlockHeader::from(&block.content),
-                                block.content.transactions,
                                 vote_signatures.to_vec()
                             );
                             self.request(sender, dispatcher_queue_sender).await;

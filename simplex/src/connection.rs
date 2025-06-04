@@ -65,7 +65,6 @@ pub async fn broadcast_to_sample<M: SimplexMessage>(
     private_key: &Ed25519KeyPair,
     connections: &mut Vec<Option<TcpStream>>,
     message: &M,
-    sample_set: Vec<u32>,
     my_node_id: u32,
     enable_crypto: bool,
 ) {
@@ -85,30 +84,33 @@ pub async fn broadcast_to_sample<M: SimplexMessage>(
     };
 
     let mut failed_indices = vec![];
-
-    for i in sample_set {
-        let id = if my_node_id >= i {
-            i
-        } else {
-            i - 1
-        };
-        let stream = &mut connections[id as usize];
-        match stream {
-            None => {}
-            Some(stream) => {
-                if stream.write_all(&length_bytes).await.is_err() || stream.write_all(&payload).await.is_err() || match &signature {
-                    Some(sig) => stream.write_all(sig.as_ref()).await.is_err(),
-                    None => false,
-                } {
-                    error!("Failed to send message to connection {}", i);
-                    failed_indices.push(id);
+    if let Some(sample_set) = message.get_sample_set() {
+        for i in sample_set {
+            if *i != my_node_id {
+                let id = if my_node_id >= *i {
+                    *i
+                } else {
+                    *i - 1
+                };
+                let stream = &mut connections[id as usize];
+                match stream {
+                    None => {}
+                    Some(stream) => {
+                        if stream.write_all(&length_bytes).await.is_err() || stream.write_all(&payload).await.is_err() || match &signature {
+                            Some(sig) => stream.write_all(sig.as_ref()).await.is_err(),
+                            None => false,
+                        } {
+                            error!("Failed to send message to connection {}", i);
+                            failed_indices.push(id);
+                        }
+                    }
                 }
             }
         }
-    }
 
-    for i in failed_indices.into_iter().rev() {
-        connections[i as usize] = None;
+        for i in failed_indices.into_iter().rev() {
+            connections[i as usize] = None;
+        }
     }
 }
 

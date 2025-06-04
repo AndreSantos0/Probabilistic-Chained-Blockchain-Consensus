@@ -5,6 +5,7 @@ pub trait SimplexMessage: Clone + Send + Sync + serde::Serialize + for<'de> serd
     fn is_vote(&self) -> bool;
     fn get_signature_bytes(&self) -> Option<&[u8]>;
     fn get_vote_header_bytes(&self) -> Option<Vec<u8>>;
+    fn get_sample_set(&self) -> Option<&Vec<u32>>;
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
@@ -107,6 +108,10 @@ impl SimplexMessage for PracticalSimplexMessage {
             _ => None,
         }
     }
+
+    fn get_sample_set(&self) -> Option<&Vec<u32>> {
+        None
+    }
 }
 
 impl SimplexMessage for ProbabilisticSimplexMessage {
@@ -125,6 +130,14 @@ impl SimplexMessage for ProbabilisticSimplexMessage {
     fn get_vote_header_bytes(&self) -> Option<Vec<u8>> {
         match self {
             Self::Vote(v) => serialize(&v.header).ok(),
+            _ => None,
+        }
+    }
+
+    fn get_sample_set(&self) -> Option<&Vec<u32>> {
+        match self {
+            Self::Vote(v) => Some(&v.sample),
+            Self::Finalize(v) => Some(&v.sample),
             _ => None,
         }
     }
