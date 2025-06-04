@@ -633,7 +633,8 @@ impl ProbabilisticSimplex {
             finalizes.push(sender);
             if finalizes.len() == self.probabilistic_quorum_size {
                 if let Some(_) = self.blockchain.get_block(finalize.iter) {
-                    self.blockchain.finalize(finalize.iter).await;
+                    let blocks_finalized = self.blockchain.finalize(finalize.iter).await;
+                    self.blocks_finalized += blocks_finalized as u32;
                     self.proposes.retain(|iteration, _| *iteration + FINALIZATION_GAP > finalize.iter);
                     self.votes.retain(|_, signatures| signatures.len() < self.probabilistic_quorum_size);
                     self.finalizes.retain(|iteration, _| *iteration > finalize.iter);
