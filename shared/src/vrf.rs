@@ -60,5 +60,7 @@ pub fn vrf_verify(
     expected_sample_set.insert(leader_id);
 
     let actual_sample_set: HashSet<u32> = sample_set.iter().copied().collect();
-    actual_sample_set == expected_sample_set
+    let a = actual_sample_set == expected_sample_set;
+    println!("{}", a);
+    a
 }
