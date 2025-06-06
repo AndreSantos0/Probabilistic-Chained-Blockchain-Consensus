@@ -132,6 +132,7 @@ impl Protocol for PracticalSimplex {
             if node.id != self.environment.my_node.id {
                 let address = format!("{}:{}", node.host, node.port);
                 let mut stream = TcpStream::connect(address).await.expect(&format!("[Node {}] Failed to connect to Node {}", self.environment.my_node.id, node.id));
+                stream.set_nodelay(true).expect("TODO: panic message");
                 let node_id_bytes = self.environment.my_node.id.to_be_bytes();
                 let nonce = generate_nonce();
                 let signature = self.private_key.sign(&nonce);
