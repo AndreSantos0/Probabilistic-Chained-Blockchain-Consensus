@@ -42,16 +42,19 @@ pub async fn broadcast<M: SimplexMessage>(
     let mut failed_indices = vec![];
 
     for (i, stream) in connections.iter_mut().enumerate() {
-        match stream {
-            None => {}
-            Some(stream) => {
-                if stream.write_all(&length_bytes).await.is_err() || stream.write_all(&payload).await.is_err() || match &signature {
-                    Some(sig) => stream.write_all(sig.as_ref()).await.is_err(),
-                    None => false,
-                } {
-                    error!("Failed to send message to connection {}", i);
-                    failed_indices.push(i);
+        if let Some(stream) = stream {
+            let mut success = true;
+
+            for data in [&length_bytes[..], &payload[..], signature.as_ref().map(|s| s.as_ref()).unwrap_or(&[])] {
+                if let Err(e) = stream.write_all(data).await {
+                    error!("Failed to send message part to connection {}: {}", i, e);
+                    success = false;
+                    break;
                 }
+            }
+
+            if !success {
+                failed_indices.push(i);
             }
         }
     }
@@ -60,6 +63,7 @@ pub async fn broadcast<M: SimplexMessage>(
         connections[i] = None;
     }
 }
+
 
 pub async fn broadcast_to_sample<M: SimplexMessage>(
     private_key: &Ed25519KeyPair,
@@ -147,12 +151,10 @@ pub async fn unicast<M: SimplexMessage>(
     match stream {
         None => {}
         Some(connection) => {
-            if connection.write_all(&length_bytes).await.is_err() || connection.write_all(&payload).await.is_err() || match &signature {
-                Some(sig) => connection.write_all(sig.as_ref()).await.is_err(),
-                None => false,
-            } {
-                error!("Failed to send message to connection");
-                connections[id as usize] = None
+            for data in [&length_bytes[..], &payload[..], signature.as_ref().map(|s| s.as_ref()).unwrap_or(&[])] {
+                if let Err(e) = connection.write_all(data).await {
+                    error!("Failed to send message part to connection {}: {}", recipient, e);
+                }
             }
         }
     }
