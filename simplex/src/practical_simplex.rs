@@ -147,6 +147,7 @@ impl Protocol for PracticalSimplex {
         while accepted != self.environment.nodes.len() - 1 {
             let (mut stream, _) = listener.accept().await.expect(&format!("[Node {}] Failed accepting incoming connection", self.environment.my_node.id));
             let mut id_buf = [0u8; 4];
+            stream.set_nodelay(true).expect("");
             stream.read_exact(&mut id_buf).await.expect(&format!("[Node {}] Failed reading during handshake", self.environment.my_node.id));
             let claimed_id = u32::from_be_bytes(id_buf);
             let mut nonce = vec![0u8; NONCE_BYTES_LENGTH];
