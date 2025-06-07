@@ -40,10 +40,10 @@ pub async fn broadcast<M: SimplexMessage>(
     };
 
     let mut buffer = Vec::with_capacity(length_bytes.len() + payload.len() + signature.as_ref().map_or(0, |s| s.as_ref().len()));
-    buffer.extend_from_slice(&length_bytes);
-    buffer.extend_from_slice(&payload);
+    buffer.extend(&length_bytes);
+    buffer.extend(&payload);
     if let Some(sig) = &signature {
-        buffer.extend_from_slice(sig.as_ref());
+        buffer.extend(sig.as_ref());
     }
 
     let mut failed_indices = vec![];
@@ -145,10 +145,10 @@ pub async fn unicast<M: SimplexMessage>(
     };
 
     let mut buffer = Vec::with_capacity(length_bytes.len() + payload.len() + signature.as_ref().map_or(0, |s| s.as_ref().len()));
-    buffer.extend_from_slice(&length_bytes);
-    buffer.extend_from_slice(&payload);
+    buffer.extend(length_bytes);
+    buffer.extend(payload);
     if let Some(sig) = &signature {
-        buffer.extend_from_slice(sig.as_ref());
+        buffer.extend(sig.as_ref());
     }
 
     let stream = &mut connections[id as usize];
