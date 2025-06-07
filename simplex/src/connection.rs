@@ -39,21 +39,19 @@ pub async fn broadcast<M: SimplexMessage>(
         Some(private_key.sign(&payload))
     };
 
+    let mut buffer = Vec::with_capacity(length_bytes.len() + payload.len() + signature.as_ref().map_or(0, |s| s.as_ref().len()));
+    buffer.extend_from_slice(&length_bytes);
+    buffer.extend_from_slice(&payload);
+    if let Some(sig) = &signature {
+        buffer.extend_from_slice(sig.as_ref());
+    }
+
     let mut failed_indices = vec![];
 
     for (i, stream) in connections.iter_mut().enumerate() {
         if let Some(stream) = stream {
-            let mut success = true;
-
-            for data in [&length_bytes[..], &payload[..], signature.as_ref().map(|s| s.as_ref()).unwrap_or(&[])] {
-                if let Err(e) = stream.write_all(data).await {
-                    error!("Failed to send message part to connection {}: {}", i, e);
-                    success = false;
-                    break;
-                }
-            }
-
-            if !success {
+            if let Err(e) = stream.write_all(&buffer).await {
+                error!("Failed to send message to connection {}: {}", i, e);
                 failed_indices.push(i);
             }
         }
@@ -63,7 +61,6 @@ pub async fn broadcast<M: SimplexMessage>(
         connections[i] = None;
     }
 }
-
 
 pub async fn broadcast_to_sample<M: SimplexMessage>(
     private_key: &Ed25519KeyPair,
@@ -147,14 +144,19 @@ pub async fn unicast<M: SimplexMessage>(
         recipient - 1
     };
 
+    let mut buffer = Vec::with_capacity(length_bytes.len() + payload.len() + signature.as_ref().map_or(0, |s| s.as_ref().len()));
+    buffer.extend_from_slice(&length_bytes);
+    buffer.extend_from_slice(&payload);
+    if let Some(sig) = &signature {
+        buffer.extend_from_slice(sig.as_ref());
+    }
+
     let stream = &mut connections[id as usize];
     match stream {
         None => {}
         Some(connection) => {
-            for data in [&length_bytes[..], &payload[..], signature.as_ref().map(|s| s.as_ref()).unwrap_or(&[])] {
-                if let Err(e) = connection.write_all(data).await {
-                    error!("Failed to send message part to connection {}: {}", recipient, e);
-                }
+            if let Err(e) = connection.write_all(&buffer).await {
+                error!("Failed to send message part to connection {}: {}", recipient, e);
             }
         }
     }
