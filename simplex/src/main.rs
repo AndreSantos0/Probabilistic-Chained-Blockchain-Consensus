@@ -32,18 +32,18 @@ async fn main() {
     match get_environment(args) {
         Ok(env) => {
             info!("Successfully read environment: {:?}", env);
-            //if env.my_node.id == 0 {
-            //    console_subscriber::init();
-            //}
-            //let main = tokio::spawn(async move {
+            if env.my_node.id == 0 {
+                console_subscriber::init();
+            }
+            let main = tokio::spawn(async move {
                 let public_keys = get_public_keys();
                 let private_key = get_private_key(env.my_node.id);
                 match protocol_mode {
                     ProtocolMode::Practical => PracticalSimplex::new(env, public_keys, private_key).start().await,
                     ProtocolMode::Probabilistic => ProbabilisticSimplex::new(env, public_keys, private_key).start().await,
                 };
-            //});
-            //main.await.expect("");
+            });
+            main.await.expect("");
         },
         Err(err) => {
             error!("Error: {}", err);
