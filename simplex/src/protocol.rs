@@ -33,10 +33,7 @@ pub trait Protocol {
     fn get_is_timeout(&self) -> &Arc<AtomicBool>;
     fn get_finalized_blocks(&self) -> u32;
 
-    async fn start(&mut self)
-    where
-        Self: Sized, <Self as Protocol>::Message: 'static
-    {
+    async fn start(&mut self) {
         let address = format!("{}:{}", self.get_environment().my_node.host, self.get_environment().my_node.port);
         match TcpListener::bind(address).await {
             Ok(listener) => {
@@ -96,10 +93,7 @@ pub trait Protocol {
         mut consumer_queue_receiver: Receiver<(u32, Self::Message)>,
         dispatcher_queue_sender: Sender<Dispatch>,
         reset_timer_sender: Sender<()>,
-    )
-    where
-        Self: Sized,
-    {
+    ) {
         let start = tokio::time::Instant::now();
         self.handle_iteration_advance(&dispatcher_queue_sender).await;
         while start.elapsed() < Duration::from_secs(60) {
