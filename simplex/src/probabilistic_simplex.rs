@@ -124,8 +124,8 @@ impl Protocol for ProbabilisticSimplex {
             match self.blockchain.check_for_possible_notarization(iteration) {
                 None => break,
                 Some(notarized) => {
-                    let propose = self.proposes.remove(&iteration).unwrap();
-                    self.blockchain.notarize(notarized.block, propose.transactions, notarized.signatures).await;
+                    let propose = self.proposes.get(&iteration).unwrap();
+                    self.blockchain.notarize(notarized.block, propose.transactions.clone(), notarized.signatures).await;
                     self.iteration.fetch_add(1, Ordering::AcqRel);
                     if !self.is_timeout.load(Ordering::Acquire) {
                         let finalize = Self::create_finalize(iteration);
@@ -543,8 +543,8 @@ impl ProbabilisticSimplex {
                     }
                     if iteration == propose.last_notarized_iter {
                         let is_timeout = self.is_timeout.load(Ordering::SeqCst);
-                        let block = self.proposes.remove(&propose.last_notarized_iter).unwrap();
-                        self.blockchain.notarize(header, block.transactions, propose.last_notarized_cert).await;
+                        let block = self.proposes.get(&propose.last_notarized_iter).unwrap();
+                        self.blockchain.notarize(header, block.transactions.clone(), propose.last_notarized_cert).await;
                         self.iteration.fetch_add(1, Ordering::SeqCst);
                         if !is_timeout {
                             let finalize = Self::create_finalize(iteration);
@@ -582,10 +582,10 @@ impl ProbabilisticSimplex {
                     Some(block) => {
                         let is_timeout = self.is_timeout.load(Ordering::Acquire);
                         if vote.iteration == iteration {
-                            let block = self.proposes.remove(&vote.iteration).unwrap();
+                            let block = self.proposes.get(&vote.iteration).unwrap();
                             self.blockchain.notarize(
                                 SimplexBlockHeader::from(&block),
-                                block.transactions,
+                                block.transactions.clone(),
                                 vote_signatures.to_vec()
                             ).await;
                             self.iteration.fetch_add(1, Ordering::AcqRel);
