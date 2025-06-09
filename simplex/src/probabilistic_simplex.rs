@@ -584,7 +584,7 @@ impl ProbabilisticSimplex {
                         if vote.iteration == iteration {
                             let block = self.proposes.get(&vote.iteration).unwrap();
                             self.blockchain.notarize(
-                                SimplexBlockHeader::from(&block),
+                                SimplexBlockHeader::from(block),
                                 block.transactions.clone(),
                                 vote_signatures.to_vec()
                             ).await;
