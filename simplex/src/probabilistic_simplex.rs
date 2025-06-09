@@ -485,6 +485,7 @@ impl ProbabilisticSimplex {
         if !self.proposes.contains_key(&propose.content.iteration) && sender == leader {
             let iteration = self.iteration.load(Ordering::Acquire);
             let is_extendable = self.blockchain.is_extendable(&propose.content);
+            self.proposes.insert(propose.content.iteration, propose.content.clone());
             if propose.content.iteration == iteration {
                 if is_extendable && !self.is_timeout.load(Ordering::Acquire) {
                     let block = SimplexBlockHeader::from(&propose.content);
@@ -504,7 +505,7 @@ impl ProbabilisticSimplex {
                         }
                         self.handle_iteration_advance(dispatcher_queue_sender).await;
                         let _ = reset_timer_sender.send(()).await;
-                        return;
+                        //return;
                     }
                 }
             }
@@ -543,7 +544,7 @@ impl ProbabilisticSimplex {
                     }
                     if iteration == propose.last_notarized_iter {
                         let is_timeout = self.is_timeout.load(Ordering::SeqCst);
-                        let block = self.proposes.get(&propose.last_notarized_iter).unwrap();
+                        //let block = self.proposes.remove(&propose.last_notarized_iter).unwrap();
                         self.blockchain.notarize(header, block.transactions.clone(), propose.last_notarized_cert).await;
                         self.iteration.fetch_add(1, Ordering::SeqCst);
                         if !is_timeout {
@@ -557,8 +558,6 @@ impl ProbabilisticSimplex {
                     }
                 }
             }
-
-            self.proposes.insert(propose.content.iteration, propose.content);
         }
     }
 
@@ -582,7 +581,7 @@ impl ProbabilisticSimplex {
                     Some(block) => {
                         let is_timeout = self.is_timeout.load(Ordering::Acquire);
                         if vote.iteration == iteration {
-                            let block = self.proposes.get(&vote.iteration).unwrap();
+                            //let block = self.proposes.remove(&vote.iteration).unwrap();
                             self.blockchain.notarize(
                                 SimplexBlockHeader::from(block),
                                 block.transactions.clone(),
