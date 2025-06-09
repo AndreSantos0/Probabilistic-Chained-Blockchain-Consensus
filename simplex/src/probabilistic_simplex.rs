@@ -485,6 +485,7 @@ impl ProbabilisticSimplex {
         if !self.proposes.contains_key(&propose.content.iteration) && sender == leader {
             let iteration = self.iteration.load(Ordering::Acquire);
             let is_extendable = self.blockchain.is_extendable(&propose.content);
+            self.proposes.insert(propose.content.iteration, propose.content.clone());
             if propose.content.iteration == iteration {
                 if is_extendable && !self.is_timeout.load(Ordering::Acquire) {
                     let block = SimplexBlockHeader::from(&propose.content);
@@ -504,7 +505,7 @@ impl ProbabilisticSimplex {
                         }
                         self.handle_iteration_advance(dispatcher_queue_sender).await;
                         let _ = reset_timer_sender.send(()).await;
-                        return;
+                        //return;
                     }
                 }
             }
@@ -557,8 +558,6 @@ impl ProbabilisticSimplex {
                     }
                 }
             }
-
-            self.proposes.insert(propose.content.iteration, propose.content);
         }
     }
 
