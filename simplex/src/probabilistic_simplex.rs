@@ -3,7 +3,7 @@ use crate::blockchain::Blockchain;
 use crate::connection::{broadcast, broadcast_to_sample, generate_nonce, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
 use crate::message::{Dispatch, ProbFinalize, ProbPropose, ProbVote, ProbabilisticSimplexMessage, Reply, Request, SimplexMessage, Timeout};
 use crate::protocol::Protocol;
-use ring::signature::{Ed25519KeyPair, UnparsedPublicKey, ED25519};
+use ring::signature::{Ed25519KeyPair, UnparsedPublicKey};
 use sha2::{Digest, Sha256};
 use shared::domain::environment::Environment;
 use shared::transaction_generator::TransactionGenerator;
@@ -22,6 +22,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender};
 use shared::initializer::get_private_key;
 use futures::future::join_all;
+use tokio::task::JoinHandle;
 
 pub struct ProbabilisticSimplex {
     environment: Environment,
@@ -517,13 +518,12 @@ impl ProbabilisticSimplex {
                     let header = SimplexBlockHeader::from(block);
                     if !self.environment.test_flag {
                         let verify_futures = propose.last_notarized_cert.iter().map(|vote_signature| {
-                            let public_keys = &self.public_keys;
-                            let header = header.clone(); // or use Arc if cloning is expensive
-
+                            let public_keys = self.public_keys.clone();
+                            let header = header.clone();
+                            let vote_signature = vote_signature.clone();
                             tokio::task::spawn_blocking(move || {
-                                match public_keys.get(&vote_signature.node) {
+                                match public_keys.get(&sender) {
                                     Some(key) => {
-                                        let public_key = UnparsedPublicKey::new(&ED25519, key);
                                         let serialized_message = match serialize(&header) {
                                             Ok(msg) => msg,
                                             Err(e) => {
@@ -531,7 +531,7 @@ impl ProbabilisticSimplex {
                                                 return false;
                                             }
                                         };
-                                        match public_key.verify(&serialized_message, vote_signature.signature.as_ref()) {
+                                        match key.verify(&serialized_message, vote_signature.signature.as_ref()) {
                                             Ok(_) => true,
                                             Err(_) => {
                                                 warn!("Propose Signature verification failed");
@@ -539,7 +539,7 @@ impl ProbabilisticSimplex {
                                             }
                                         }
                                     }
-                                    None => false,
+                                    _ => { false }
                                 }
                             })
                         });
