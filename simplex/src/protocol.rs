@@ -121,7 +121,7 @@ pub trait Protocol {
         finalize_sender: Sender<Vec<NotarizedBlock>>,
     ) {
         let start = tokio::time::Instant::now();
-        self.handle_iteration_advance(&dispatcher_queue_sender).await;
+        self.handle_iteration_advance(&dispatcher_queue_sender, &finalize_sender).await;
         while start.elapsed() < Duration::from_secs(60) {
             if let Some((sender, message)) = consumer_queue_receiver.recv().await {
                 self.handle_message(sender, message, &dispatcher_queue_sender, &reset_timer_sender, &finalize_sender).await;
@@ -131,7 +131,7 @@ pub trait Protocol {
         std::process::exit(0);
     }
 
-    async fn handle_iteration_advance(&mut self, dispatcher_queue_sender: &Sender<Dispatch>);
+    async fn handle_iteration_advance(&mut self, dispatcher_queue_sender: &Sender<Dispatch>, finalize_sender: &Sender<Vec<NotarizedBlock>>);
 
     fn get_leader(n_nodes: usize, iteration: u32) -> u32 {
         let mut hasher = Sha256::new();

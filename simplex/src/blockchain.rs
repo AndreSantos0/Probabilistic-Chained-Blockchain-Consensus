@@ -88,11 +88,11 @@ impl Blockchain {
         self.notarized.iter().find(|notarized| Some(Blockchain::hash(notarized)) == *hash)
     }
 
-    pub async fn notarize(&mut self, block: SimplexBlockHeader, transactions: Vec<Transaction>, signatures: Vec<VoteSignature>) {
+    pub async fn notarize(&mut self, block: SimplexBlockHeader, transactions: Vec<Transaction>, signatures: Vec<VoteSignature>, finalize_sender: &Sender<Vec<NotarizedBlock>>) {
         let iteration = block.iteration;
         self.notarized.push(NotarizedBlock { block, signatures, transactions });
         if self.to_be_finalized.contains(&iteration) {
-            self.finalize(iteration).await;
+            self.finalize(iteration, finalize_sender).await;
             self.to_be_finalized.retain(|iter| *iter != iteration);
         }
     }
@@ -135,7 +135,7 @@ impl Blockchain {
         self.to_be_finalized.push(iteration);
     }
 
-    pub async fn finalize(&mut self, iteration: u32) -> Vec<NotarizedBlock> {
+    pub async fn finalize(&mut self, iteration: u32, finalize_sender: &Sender<Vec<NotarizedBlock>>) -> usize {
         let mut blocks_to_be_finalized = Vec::new();
         let mut last_parent_hash = None;
 
@@ -151,7 +151,10 @@ impl Blockchain {
 
         self.finalized_height = iteration;
         self.notarized.retain(|notarized| notarized.block.iteration >= iteration);
-        blocks_to_be_finalized.into_iter().rev().collect()
+        let n_finalized = blocks_to_be_finalized.len();
+        let blocks_finalized = blocks_to_be_finalized.into_iter().rev().collect();
+        let _ = finalize_sender.send(blocks_finalized).await;
+        n_finalized
     }
 
     pub fn print(&self) {

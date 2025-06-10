@@ -2,12 +2,10 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::{env, fs};
 use std::fs::File;
-use chrono::{Local, Timelike};
 use csv::ReaderBuilder;
 use toml::Value;
 use base64::{engine::general_purpose, Engine as _};
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey, ED25519};
-use tokio::time::{sleep, Duration};
 use crate::domain::environment::Environment;
 use crate::domain::node::Node;
 
@@ -82,23 +80,4 @@ pub fn get_private_key(node_id: u32) -> Ed25519KeyPair {
     let encoded_key = env::var(format!("{}{}", PRIVATE_KEY_ENV, node_id)).expect("Private key environment variable is not set");
     let key_data = general_purpose::STANDARD.decode(encoded_key).expect("Failed to decode base64 private key");
     Ed25519KeyPair::from_pkcs8(&key_data).expect("Failed to parse private key")
-}
-
-pub async fn wait_until_specific_time(hour: u32, minute: u32) {
-    let now = Local::now();
-    let current_hour = now.hour();
-    let current_minute = now.minute();
-    let current_second = now.second();
-
-    let target_hour = hour;
-    let target_minute = minute;
-
-    let hours_left = target_hour - current_hour;
-    let minutes_left = target_minute - current_minute;
-    let total_seconds_left = hours_left * SECONDS_PER_HOUR + minutes_left * SECONDS_PER_MINUTE - current_second;
-
-    if total_seconds_left > 0 {
-        let duration = Duration::from_secs(total_seconds_left as u64);
-        sleep(duration).await;
-    }
 }
