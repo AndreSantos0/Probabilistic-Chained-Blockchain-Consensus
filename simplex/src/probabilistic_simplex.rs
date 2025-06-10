@@ -522,7 +522,7 @@ impl ProbabilisticSimplex {
                             let header = header.clone();
                             let vote_signature = vote_signature.clone();
                             tokio::task::spawn_blocking(move || {
-                                match public_keys.get(&sender) {
+                                match public_keys.get(&vote_signature.node) {
                                     Some(key) => {
                                         let serialized_message = match serialize(&header) {
                                             Ok(msg) => msg,
