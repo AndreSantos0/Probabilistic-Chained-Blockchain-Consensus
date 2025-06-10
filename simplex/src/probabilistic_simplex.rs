@@ -21,6 +21,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender};
 use shared::initializer::get_private_key;
+use futures::future::join_all;
 
 pub struct ProbabilisticSimplex {
     environment: Environment,
@@ -515,10 +516,12 @@ impl ProbabilisticSimplex {
                     let block = self.proposes.get(&propose.last_notarized_iter).unwrap();
                     let header = SimplexBlockHeader::from(block);
                     if !self.environment.test_flag {
-                        let all_verified = propose.last_notarized_cert
-                            .iter()
-                            .map(|vote_signature| {
-                                match self.public_keys.get(&vote_signature.node) {
+                        let verify_futures = propose.last_notarized_cert.iter().map(|vote_signature| {
+                            let public_keys = &self.public_keys;
+                            let header = header.clone(); // or use Arc if cloning is expensive
+
+                            tokio::task::spawn_blocking(move || {
+                                match public_keys.get(&vote_signature.node) {
                                     Some(key) => {
                                         let public_key = UnparsedPublicKey::new(&ED25519, key);
                                         let serialized_message = match serialize(&header) {
@@ -539,12 +542,17 @@ impl ProbabilisticSimplex {
                                     None => false,
                                 }
                             })
-                            .all(|verified| verified);
+                        });
 
-                        if !all_verified {
+                        // Run all verifications concurrently, await results
+                        let results = join_all(verify_futures).await;
+
+                        // Check if all signatures verified successfully
+                        if !results.into_iter().all(|res| res.unwrap_or(false)) {
                             return;
                         }
                     }
+
                     if iteration == propose.last_notarized_iter {
                         let is_timeout = self.is_timeout.load(Ordering::SeqCst);
                         //let block = self.proposes.remove(&propose.last_notarized_iter).unwrap();
