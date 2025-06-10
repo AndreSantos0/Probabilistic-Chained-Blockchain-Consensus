@@ -1,4 +1,4 @@
-use crate::block::{SimplexBlockHeader, NodeId, SimplexBlock};
+use crate::block::{SimplexBlockHeader, NodeId, SimplexBlock, NotarizedBlock};
 use crate::message::{Dispatch, SimplexMessage};
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey};
 use shared::domain::environment::Environment;
@@ -6,7 +6,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use log::{error};
+use serde_json::to_string;
 use sha2::{Digest, Sha256};
+use tokio::fs::OpenOptions;
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -16,6 +19,8 @@ pub enum ProtocolMode {
     Practical,
     Probabilistic
 }
+
+pub const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks_";
 
 pub trait Protocol {
 
@@ -31,7 +36,7 @@ pub trait Protocol {
     fn get_environment(&self) -> &Environment;
     fn get_iteration(&self) -> &Arc<AtomicU32>;
     fn get_is_timeout(&self) -> &Arc<AtomicBool>;
-    fn get_finalized_blocks(&self) -> u32;
+    fn get_finalized_blocks(&self) -> usize;
 
     async fn start(&mut self) {
         let address = format!("{}:{}", self.get_environment().my_node.host, self.get_environment().my_node.port);
@@ -40,15 +45,21 @@ pub trait Protocol {
                 let (consumer_queue_sender, consumer_queue_receiver) = mpsc::channel::<(NodeId, Self::Message)>(Self::MESSAGE_CHANNEL_SIZE);
                 let (dispatcher_queue_sender, dispatcher_queue_receiver) = mpsc::channel::<Dispatch>(Self::MESSAGE_CHANNEL_SIZE);
                 let (reset_timer_sender, reset_timer_receiver) = mpsc::channel::<()>(Self::RESET_TIMER_CHANNEL_SIZE);
+                let (finalize_sender, finalize_receiver) = mpsc::channel::<Vec<NotarizedBlock>>(Self::MESSAGE_CHANNEL_SIZE);
                 sleep(Duration::from_secs(Self::SOCKET_BINDING_DELAY)).await;
                 let connections = self.connect(consumer_queue_sender.clone(), listener).await;
                 self.start_message_dispatcher(&consumer_queue_sender, dispatcher_queue_receiver, connections).await;
                 self.start_iteration_timer(dispatcher_queue_sender.clone(), reset_timer_receiver).await;
-                self.execute_protocol(consumer_queue_receiver, dispatcher_queue_sender, reset_timer_sender).await;
+                self.start_finalize_task(finalize_receiver).await;
+                self.execute_protocol(consumer_queue_receiver, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
             }
             Err(_) => { error!("[Node {}] Failed to bind local port", self.get_environment().my_node.id) }
         };
     }
+
+    async fn connect(&self, message_queue_sender: Sender<(NodeId, Self::Message)>, listener: TcpListener) -> Vec<Option<TcpStream>>;
+
+    async fn start_message_dispatcher(&self, message_queue_sender: &Sender<(NodeId, Self::Message)>, dispatcher_queue_receiver: Receiver<Dispatch>, connections: Vec<Option<TcpStream>>);
 
     async fn start_iteration_timer(&self, dispatcher_queue_sender: Sender<Dispatch>, mut reset_timer_receiver: Receiver<()>) {
         let iteration_counter = self.get_iteration().clone();
@@ -78,6 +89,50 @@ pub trait Protocol {
         });
     }
 
+    async fn start_finalize_task(&self, mut finalize_receiver: Receiver<Vec<NotarizedBlock>>) {
+        let my_node_id = self.get_environment().my_node.id;
+        tokio::spawn(async move {
+            loop {
+                if let Some(blocks) = finalize_receiver.recv().await {
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .append(true)
+                        .open(format!("{}{}.ndjson", FINALIZED_BLOCKS_FILENAME, my_node_id))
+                        .await
+                        .expect("Could not open blockchain file");
+
+                    let block_data = blocks.iter().map(|notarized| {
+                        to_string(notarized).expect("Failed to serialize block")+ "\n"
+                    })
+                    .collect::<Vec<String>>()
+                    .join("");
+                    file.write_all(block_data.as_bytes()).await.expect("Error writing blocks to file");
+                }
+            }
+        });
+    }
+
+    async fn execute_protocol(
+        &mut self,
+        mut consumer_queue_receiver: Receiver<(u32, Self::Message)>,
+        dispatcher_queue_sender: Sender<Dispatch>,
+        reset_timer_sender: Sender<()>,
+        finalize_sender: Sender<Vec<NotarizedBlock>>,
+    ) {
+        let start = tokio::time::Instant::now();
+        self.handle_iteration_advance(&dispatcher_queue_sender).await;
+        while start.elapsed() < Duration::from_secs(60) {
+            if let Some((sender, message)) = consumer_queue_receiver.recv().await {
+                self.handle_message(sender, message, &dispatcher_queue_sender, &reset_timer_sender, &finalize_sender).await;
+            }
+        }
+        println!("{} blocks finalized", self.get_finalized_blocks());
+        std::process::exit(0);
+    }
+
+    async fn handle_iteration_advance(&mut self, dispatcher_queue_sender: &Sender<Dispatch>);
+
     fn get_leader(n_nodes: usize, iteration: u32) -> u32 {
         let mut hasher = Sha256::new();
         hasher.update(&iteration.to_le_bytes());
@@ -86,26 +141,8 @@ pub trait Protocol {
         (hash_u64 % n_nodes as u64) as u32
     }
 
-    async fn handle_iteration_advance(&mut self, dispatcher_queue_sender: &Sender<Dispatch>);
+    async fn handle_message(&mut self, sender: u32, message: Self::Message, dispatcher_queue_sender: &Sender<Dispatch>, reset_timer_sender: &Sender<()>, finalize_sender: &Sender<Vec<NotarizedBlock>>);
 
-    async fn execute_protocol(
-        &mut self,
-        mut consumer_queue_receiver: Receiver<(u32, Self::Message)>,
-        dispatcher_queue_sender: Sender<Dispatch>,
-        reset_timer_sender: Sender<()>,
-    ) {
-        let start = tokio::time::Instant::now();
-        self.handle_iteration_advance(&dispatcher_queue_sender).await;
-        while start.elapsed() < Duration::from_secs(60) {
-            if let Some((sender, message)) = consumer_queue_receiver.recv().await {
-                self.handle_message(sender, message, &dispatcher_queue_sender, &reset_timer_sender).await;
-            }
-        }
-        println!("{} blocks finalized", self.get_finalized_blocks());
-        std::process::exit(0);
-    }
-
-    async fn connect(&self, message_queue_sender: Sender<(NodeId, Self::Message)>, listener: TcpListener) -> Vec<Option<TcpStream>>;
     fn create_proposal(&self, block: SimplexBlock) -> Dispatch;
     fn create_timeout(next_iteration: u32) -> Dispatch;
     fn create_vote(iteration: u32, block: SimplexBlockHeader) -> Dispatch;
@@ -113,6 +150,4 @@ pub trait Protocol {
     fn get_proposal_block(&self, iteration: u32) -> Option<&SimplexBlock>;
     fn get_timeouts(&self, iteration: u32) -> usize;
     fn clear_timeouts(&mut self, iteration: u32);
-    async fn handle_message(&mut self, sender: u32, message: Self::Message, dispatcher_queue_sender: &Sender<Dispatch>, reset_timer_sender: &Sender<()>);
-    async fn start_message_dispatcher(&self, message_queue_sender: &Sender<(NodeId, Self::Message)>, dispatcher_queue_receiver: Receiver<Dispatch>, connections: Vec<Option<TcpStream>>);
 }

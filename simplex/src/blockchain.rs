@@ -1,18 +1,17 @@
 use bincode::serialize;
 use log::info;
 use crate::block::{SimplexBlockHeader, NotarizedBlock, SimplexBlock, VoteSignature};
-use serde_json::to_string;
 use sha2::{Digest, Sha256};
 use shared::domain::transaction::Transaction;
-use tokio::fs::{File, OpenOptions};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::fs::{File};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc::Sender;
 use crate::message::Dispatch;
+use crate::protocol::FINALIZED_BLOCKS_FILENAME;
 
 const GENESIS_ITERATION: u32 = 0;
 const GENESIS_LENGTH: u32 = 0;
 const INITIAL_FINALIZED_HEIGHT: u32 = 0;
-const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks_";
 
 
 pub struct ToBeNotarized {
@@ -136,7 +135,7 @@ impl Blockchain {
         self.to_be_finalized.push(iteration);
     }
 
-    pub async fn finalize(&mut self, iteration: u32) -> usize {
+    pub async fn finalize(&mut self, iteration: u32) -> Vec<NotarizedBlock> {
         let mut blocks_to_be_finalized = Vec::new();
         let mut last_parent_hash = None;
 
@@ -150,28 +149,9 @@ impl Blockchain {
             }
         }
 
-        let blocks_finalized = blocks_to_be_finalized.len();
-        let node_id = self.my_node_id;
-        tokio::spawn(async move {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .append(true)
-                .open(format!("{}{}.ndjson", FINALIZED_BLOCKS_FILENAME, node_id))
-                .await
-                .expect("Could not open blockchain file");
-
-            let block_data = blocks_to_be_finalized.iter().rev().map(|notarized| {
-                to_string(notarized).expect("Failed to serialize block")+ "\n"
-            })
-            .collect::<Vec<String>>()
-            .join("");
-            file.write_all(block_data.as_bytes()).await.expect("Error writing blocks to file");
-        });
-
         self.finalized_height = iteration;
         self.notarized.retain(|notarized| notarized.block.iteration >= iteration);
-        blocks_finalized
+        blocks_to_be_finalized.into_iter().rev().collect()
     }
 
     pub fn print(&self) {

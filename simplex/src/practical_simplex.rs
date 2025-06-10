@@ -1,4 +1,4 @@
-use crate::block::{NodeId, SimplexBlock, SimplexBlockHeader, VoteSignature};
+use crate::block::{NodeId, NotarizedBlock, SimplexBlock, SimplexBlockHeader, VoteSignature};
 use crate::blockchain::Blockchain;
 use crate::connection::{broadcast, generate_nonce, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
 use crate::message::{Dispatch, Finalize, PracticalSimplexMessage, Propose, Reply, Request, SimplexMessage, Timeout, View, Vote};
@@ -24,7 +24,7 @@ pub struct PracticalSimplex {
     quorum_size: usize,
     iteration: Arc<AtomicU32>,
     is_timeout: Arc<AtomicBool>,
-    blocks_finalized: u32,
+    blocks_finalized: usize,
     proposes: HashMap<u32, Propose>,
     votes: HashMap<SimplexBlockHeader, Vec<VoteSignature>>,
     timeouts: HashMap<u32, Vec<u32>>,
@@ -73,57 +73,8 @@ impl Protocol for PracticalSimplex {
         &self.is_timeout
     }
 
-    fn get_finalized_blocks(&self) -> u32 {
+    fn get_finalized_blocks(&self) -> usize {
         self.blocks_finalized
-    }
-
-    async fn handle_iteration_advance(&mut self, dispatcher_queue_sender: &Sender<Dispatch>) {
-        loop {
-            let iteration = self.iteration.load(Ordering::Acquire);
-            let leader = Self::get_leader(self.environment.nodes.len(), iteration);
-            self.is_timeout.store(false, Ordering::Release);
-            self.clear_timeouts(iteration);
-            info!("----------------------");
-            info!("----------------------");
-            info!("Leader is node {} | Iteration: {}", leader, iteration);
-            //self.blockchain().print();
-
-            let my_node_id = self.environment.my_node.id;
-            if leader == my_node_id {
-                let transactions = self.transaction_generator.generate();
-                let block = self.blockchain.get_next_block(iteration, transactions);
-                info!("Proposed {}", block.length);
-                let propose = self.create_proposal(block);
-                let _ = dispatcher_queue_sender.send(propose).await;
-            }
-
-            if let Some(propose) = self.get_proposal_block(iteration) {
-                if !self.is_timeout.load(Ordering::Acquire) && self.blockchain.is_extendable(propose) {
-                    let block = SimplexBlockHeader::from(propose);
-                    let vote = Self::create_vote(iteration, block);
-                    let _ = dispatcher_queue_sender.send(vote).await;
-                }
-            }
-
-            if self.get_timeouts(iteration + 1) >= self.quorum_size {
-                self.iteration.store(iteration + 1, Ordering::Release);
-                continue;
-            }
-
-            match self.blockchain.check_for_possible_notarization(iteration) {
-                None => break,
-                Some(notarized) => {
-                    let propose = self.proposes.remove(&iteration).unwrap();
-                    self.blockchain.notarize(notarized.block.clone(), propose.content.transactions, notarized.signatures.clone()).await;
-                    self.iteration.fetch_add(1, Ordering::AcqRel);
-                    if !self.is_timeout.load(Ordering::Acquire) {
-                        let finalize = Self::create_finalize(iteration);
-                        let _ = dispatcher_queue_sender.send(finalize).await;
-                    }
-                    let _ = dispatcher_queue_sender.send(Dispatch::View(notarized.block, notarized.signatures)).await;
-                }
-            }
-        }
     }
 
     async fn connect(&self, message_queue_sender: Sender<(NodeId, PracticalSimplexMessage)>, listener: TcpListener) -> Vec<Option<TcpStream>> {
@@ -179,6 +130,86 @@ impl Protocol for PracticalSimplex {
         connections
     }
 
+    async fn start_message_dispatcher(
+        &self,
+        message_queue_sender: &Sender<(NodeId, PracticalSimplexMessage)>,
+        mut dispatcher_queue_receiver: Receiver<Dispatch>,
+        mut connections: Vec<Option<TcpStream>>
+    ) {
+        let my_node_id = self.environment.my_node.id;
+        let private_key = get_private_key(my_node_id);
+        let enable_crypto = !self.environment.test_flag;
+        let message_queue_sender = message_queue_sender.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Some(message) = dispatcher_queue_receiver.recv().await {
+                    Self::dispatch_message(&message_queue_sender, message, &private_key, enable_crypto, my_node_id, &mut connections).await;
+                }
+            }
+        });
+    }
+
+    async fn handle_iteration_advance(&mut self, dispatcher_queue_sender: &Sender<Dispatch>) {
+        loop {
+            let iteration = self.iteration.load(Ordering::Acquire);
+            let leader = Self::get_leader(self.environment.nodes.len(), iteration);
+            self.is_timeout.store(false, Ordering::Release);
+            self.clear_timeouts(iteration);
+            info!("----------------------");
+            info!("----------------------");
+            info!("Leader is node {} | Iteration: {}", leader, iteration);
+            //self.blockchain().print();
+
+            let my_node_id = self.environment.my_node.id;
+            if leader == my_node_id {
+                let transactions = self.transaction_generator.generate();
+                let block = self.blockchain.get_next_block(iteration, transactions);
+                info!("Proposed {}", block.length);
+                let propose = self.create_proposal(block);
+                let _ = dispatcher_queue_sender.send(propose).await;
+            }
+
+            if let Some(propose) = self.get_proposal_block(iteration) {
+                if !self.is_timeout.load(Ordering::Acquire) && self.blockchain.is_extendable(propose) {
+                    let block = SimplexBlockHeader::from(propose);
+                    let vote = Self::create_vote(iteration, block);
+                    let _ = dispatcher_queue_sender.send(vote).await;
+                }
+            }
+
+            if self.get_timeouts(iteration + 1) >= self.quorum_size {
+                self.iteration.store(iteration + 1, Ordering::Release);
+                continue;
+            }
+
+            match self.blockchain.check_for_possible_notarization(iteration) {
+                None => break,
+                Some(notarized) => {
+                    let propose = self.proposes.remove(&iteration).unwrap();
+                    self.blockchain.notarize(notarized.block.clone(), propose.content.transactions, notarized.signatures.clone()).await;
+                    self.iteration.fetch_add(1, Ordering::AcqRel);
+                    if !self.is_timeout.load(Ordering::Acquire) {
+                        let finalize = Self::create_finalize(iteration);
+                        let _ = dispatcher_queue_sender.send(finalize).await;
+                    }
+                    let _ = dispatcher_queue_sender.send(Dispatch::View(notarized.block, notarized.signatures)).await;
+                }
+            }
+        }
+    }
+
+    async fn handle_message(&mut self, sender: u32, message: PracticalSimplexMessage, dispatcher_queue_sender: &Sender<Dispatch>, reset_timer_sender: &Sender<()>, finalize_sender: &Sender<Vec<NotarizedBlock>>) {
+        match message {
+            PracticalSimplexMessage::Propose(propose) => self.handle_propose(propose, sender, dispatcher_queue_sender, reset_timer_sender).await,
+            PracticalSimplexMessage::Vote(vote) => self.handle_vote(vote, sender, dispatcher_queue_sender, reset_timer_sender).await,
+            PracticalSimplexMessage::Timeout(timeout) => self.handle_timeout(timeout, sender, dispatcher_queue_sender, reset_timer_sender).await,
+            PracticalSimplexMessage::Finalize(finalize) => self.handle_finalize(finalize, sender, dispatcher_queue_sender, finalize_sender).await,
+            PracticalSimplexMessage::View(view) => self.handle_view(view, sender, dispatcher_queue_sender).await,
+            PracticalSimplexMessage::Request(request) => self.handle_request(request, sender, dispatcher_queue_sender).await,
+            PracticalSimplexMessage::Reply(reply) => self.handle_reply(reply, dispatcher_queue_sender, reset_timer_sender).await,
+        }
+    }
+
     fn create_proposal(&self, block: SimplexBlock) -> Dispatch {
         Dispatch::Propose(block)
     }
@@ -208,37 +239,6 @@ impl Protocol for PracticalSimplex {
 
     fn clear_timeouts(&mut self, iteration: u32) {
         self.timeouts.retain(|iter, _| *iter > iteration);
-    }
-
-    async fn handle_message(&mut self, sender: u32, message: PracticalSimplexMessage, dispatcher_queue_sender: &Sender<Dispatch>, reset_timer_sender: &Sender<()>) {
-        match message {
-            PracticalSimplexMessage::Propose(propose) => self.handle_propose(propose, sender, dispatcher_queue_sender, reset_timer_sender).await,
-            PracticalSimplexMessage::Vote(vote) => self.handle_vote(vote, sender, dispatcher_queue_sender, reset_timer_sender).await,
-            PracticalSimplexMessage::Timeout(timeout) => self.handle_timeout(timeout, sender, dispatcher_queue_sender, reset_timer_sender).await,
-            PracticalSimplexMessage::Finalize(finalize) => self.handle_finalize(finalize, sender, dispatcher_queue_sender).await,
-            PracticalSimplexMessage::View(view) => self.handle_view(view, sender, dispatcher_queue_sender).await,
-            PracticalSimplexMessage::Request(request) => self.handle_request(request, sender, dispatcher_queue_sender).await,
-            PracticalSimplexMessage::Reply(reply) => self.handle_reply(reply, dispatcher_queue_sender, reset_timer_sender).await,
-        }
-    }
-
-    async fn start_message_dispatcher(
-        &self,
-        message_queue_sender: &Sender<(NodeId, PracticalSimplexMessage)>,
-        mut dispatcher_queue_receiver: Receiver<Dispatch>,
-        mut connections: Vec<Option<TcpStream>>
-    ) {
-        let my_node_id = self.environment.my_node.id;
-        let private_key = get_private_key(my_node_id);
-        let enable_crypto = !self.environment.test_flag;
-        let message_queue_sender = message_queue_sender.clone();
-        tokio::spawn(async move {
-            loop {
-                if let Some(message) = dispatcher_queue_receiver.recv().await {
-                    Self::dispatch_message(&message_queue_sender, message, &private_key, enable_crypto, my_node_id, &mut connections).await;
-                }
-            }
-        });
     }
 }
 
@@ -498,7 +498,7 @@ impl PracticalSimplex {
         }
     }
 
-    async fn handle_finalize(&mut self, finalize: Finalize, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
+    async fn handle_finalize(&mut self, finalize: Finalize, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>, finalize_sender: &Sender<Vec<NotarizedBlock>>) {
         info!("Received finalize {} from {}", finalize.iter, sender);
         let finalizes = self.finalizes.entry(finalize.iter).or_insert_with(Vec::new);
         let is_first_finalize = !finalizes.iter().any(|node_id| *node_id == sender);
@@ -507,7 +507,9 @@ impl PracticalSimplex {
             if finalizes.len() == self.quorum_size {
                 if let Some(_) = self.blockchain.get_block(finalize.iter) {
                     let blocks_finalized = self.blockchain.finalize(finalize.iter).await;
-                    self.blocks_finalized += blocks_finalized as u32;
+                    let n_finalized = blocks_finalized.len();
+                    let _ = finalize_sender.send(blocks_finalized).await;
+                    self.blocks_finalized += n_finalized;
                     self.proposes.retain(|iteration, _| *iteration > finalize.iter);
                     self.votes.retain(|_, signatures| signatures.len() < self.environment.nodes.len() * 2 / 3 + 1);
                     self.finalizes.retain(|iteration, _| *iteration > finalize.iter);
