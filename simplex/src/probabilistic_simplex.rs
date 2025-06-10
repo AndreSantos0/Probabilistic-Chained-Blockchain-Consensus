@@ -516,7 +516,7 @@ impl ProbabilisticSimplex {
                     let header = SimplexBlockHeader::from(block);
                     if !self.environment.test_flag {
                         let all_verified = propose.last_notarized_cert
-                            .par_iter()
+                            .iter()
                             .map(|vote_signature| {
                                 match self.public_keys.get(&vote_signature.node) {
                                     Some(key) => {
@@ -529,18 +529,21 @@ impl ProbabilisticSimplex {
                                             }
                                         };
                                         match public_key.verify(&serialized_message, vote_signature.signature.as_ref()) {
-                                            Ok(_) => { true }
+                                            Ok(_) => true,
                                             Err(_) => {
                                                 warn!("Propose Signature verification failed");
-                                                return false;
+                                                false
                                             }
                                         }
                                     }
-                                    None => return false,
+                                    None => false,
                                 }
                             })
                             .all(|verified| verified);
-                        if !all_verified { return }
+
+                        if !all_verified {
+                            return;
+                        }
                     }
                     if iteration == propose.last_notarized_iter {
                         let is_timeout = self.is_timeout.load(Ordering::SeqCst);
