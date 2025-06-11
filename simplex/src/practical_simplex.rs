@@ -1,10 +1,8 @@
-/*
 use crate::block::{NodeId, NotarizedBlock, SimplexBlock, SimplexBlockHeader, VoteSignature};
 use crate::blockchain::Blockchain;
 use crate::connection::{broadcast, generate_nonce, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
 use crate::message::{Dispatch, Finalize, PracticalSimplexMessage, Propose, Reply, Request, SimplexMessage, Timeout, View, Vote};
 use crate::protocol::Protocol;
-use ring::signature::{Ed25519KeyPair, UnparsedPublicKey};
 use sha2::{Digest, Sha256};
 use shared::domain::environment::Environment;
 use shared::transaction_generator::TransactionGenerator;
@@ -12,8 +10,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use bincode::{deserialize, serialize};
+use ed25519_dalek::{verify_batch, Keypair, PublicKey, Signature, Signer, Verifier};
 use log::{error, info, warn};
-use rayon::prelude::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -32,15 +30,15 @@ pub struct PracticalSimplex {
     finalizes: HashMap<u32, Vec<u32>>,
     blockchain: Blockchain,
     transaction_generator: TransactionGenerator,
-    public_keys: HashMap<u32, UnparsedPublicKey<Vec<u8>>>,
-    private_key: Ed25519KeyPair,
+    public_keys: HashMap<u32, PublicKey>,
+    private_key: Keypair,
 }
 
 impl Protocol for PracticalSimplex {
 
     type Message = PracticalSimplexMessage;
 
-    fn new(environment: Environment, public_keys: HashMap<u32, UnparsedPublicKey<Vec<u8>>>, private_key: Ed25519KeyPair) -> Self {
+    fn new(environment: Environment, public_keys: HashMap<u32, PublicKey>, private_key: Keypair) -> Self {
         let my_node_id = environment.my_node.id;
         let n = environment.nodes.len();
         let transaction_size = environment.transaction_size;
@@ -84,7 +82,6 @@ impl Protocol for PracticalSimplex {
             if node.id != self.environment.my_node.id {
                 let address = format!("{}:{}", node.host, node.port);
                 let mut stream = TcpStream::connect(address).await.expect(&format!("[Node {}] Failed to connect to Node {}", self.environment.my_node.id, node.id));
-                stream.set_nodelay(true).expect("TODO: panic message");
                 let node_id_bytes = self.environment.my_node.id.to_be_bytes();
                 let nonce = generate_nonce();
                 let signature = self.private_key.sign(&nonce);
@@ -99,15 +96,14 @@ impl Protocol for PracticalSimplex {
         while accepted != self.environment.nodes.len() - 1 {
             let (mut stream, _) = listener.accept().await.expect(&format!("[Node {}] Failed accepting incoming connection", self.environment.my_node.id));
             let mut id_buf = [0u8; 4];
-            stream.set_nodelay(true).expect("");
             stream.read_exact(&mut id_buf).await.expect(&format!("[Node {}] Failed reading during handshake", self.environment.my_node.id));
             let claimed_id = u32::from_be_bytes(id_buf);
             let mut nonce = vec![0u8; NONCE_BYTES_LENGTH];
             stream.read_exact(&mut nonce).await.expect(&format!("[Node {}] Failed reading during handshake", self.environment.my_node.id));
             let mut sig = vec![0u8; SIGNATURE_BYTES_LENGTH];
             stream.read_exact(&mut sig).await.expect(&format!("[Node {}] Failed reading during handshake", self.environment.my_node.id));
-            if let Some(pubkey) = self.public_keys.get(&claimed_id) {
-                if pubkey.verify(&nonce, &sig).is_ok() {
+            if let Some(key) = self.public_keys.get(&claimed_id) {
+                if key.verify(&nonce, &Signature::from_bytes(&sig).unwrap()).is_ok() {
                     let sender = message_queue_sender.clone();
                     let enable_crypto = !self.environment.test_flag;
                     let my_node_id = self.environment.my_node.id;
@@ -248,7 +244,7 @@ impl PracticalSimplex {
     async fn dispatch_message(
         message_queue_sender: &Sender<(NodeId, PracticalSimplexMessage)>,
         content: Dispatch,
-        private_key: &Ed25519KeyPair,
+        private_key: &Keypair,
         enable_crypto: bool,
         my_node_id: u32,
         connections: &mut Vec<Option<TcpStream>>
@@ -305,7 +301,7 @@ impl PracticalSimplex {
         enable_crypto: bool,
         mut stream: TcpStream,
         message_queue_sender: Sender<(NodeId, PracticalSimplexMessage)>,
-        public_keys: &HashMap<u32, UnparsedPublicKey<Vec<u8>>>,
+        public_keys: &HashMap<u32, PublicKey>,
         quorum_size: usize,
         my_node_id: NodeId,
         node_id: NodeId,
@@ -345,7 +341,7 @@ impl PracticalSimplex {
                     }
                     (buffer, signature.as_ref())
                 };
-                if !public_key.verify(&payload, signature).is_ok() {
+                if !public_key.verify(&payload, &Signature::from_bytes(&signature).unwrap()).is_ok() {
                     continue;
                 }
 
@@ -370,24 +366,23 @@ impl PracticalSimplex {
                                         continue;
                                     }
                                 };
-                                let all_verified = notarized.signatures
-                                    .par_iter()
-                                    .map(|vote_signature| {
-                                        if let Some(key) = public_keys.get(&vote_signature.node) {
-                                            match key.verify(&serialized_message, vote_signature.signature.as_ref()) {
-                                                Ok(_) => true,
-                                                Err(_) => {
-                                                    warn!("[Node {}] Failed to verify vote signature header during reply", my_node_id);
-                                                    false
-                                                }
-                                            }
-                                        } else {
-                                            false
-                                        }
-                                    })
-                                    .all(|verified| verified);
-                                if !all_verified { continue }
-                            }
+
+                                let messages: Vec<&[u8]> = (0..notarized.signatures.len()).map(|_| serialized_message.as_slice()).collect();
+                                let signatures: Vec<Signature>  = notarized.signatures.iter().map(
+                                    |vote_signature| Signature::from_bytes(vote_signature.signature.as_ref()).unwrap()
+                                ).collect();
+                                let mut keys = Vec::with_capacity(notarized.signatures.len());
+                                for vote_signature in &notarized.signatures {
+                                    match public_keys.get(&vote_signature.node) {
+                                        Some(key) => keys.push(*key),
+                                        None => continue,
+                                    }
+                                }
+
+                                if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
+                                    continue;
+                                }
+                            } else { continue }
                         }
                     }
                     _ => {}
@@ -538,23 +533,22 @@ impl PracticalSimplex {
                     return;
                 }
             };
-            let all_verified = view.last_notarized_block_cert
-                .par_iter()
-                .map(|vote_signature| {
-                    if let Some(key) = self.public_keys.get(&vote_signature.node) {
-                        match key.verify(&serialized_message, vote_signature.signature.as_ref()) {
-                            Ok(_) => true,
-                            Err(_) => {
-                                warn!("[Node {}] Failed to verify vote signature header during view", self.environment.my_node.id);
-                                false
-                            }
-                        }
-                    } else {
-                        false
-                    }
-                })
-                .all(|verified| verified);
-            if !all_verified { return; }
+
+            let messages: Vec<&[u8]> = (0..view.last_notarized_block_cert.len()).map(|_| serialized_message.as_slice()).collect();
+            let signatures: Vec<Signature>  = view.last_notarized_block_cert.iter().map(
+                |vote_signature| Signature::from_bytes(vote_signature.signature.as_ref()).unwrap()
+            ).collect();
+            let mut keys = Vec::with_capacity(view.last_notarized_block_cert.len());
+            for vote_signature in &view.last_notarized_block_cert {
+                match self.public_keys.get(&vote_signature.node) {
+                    Some(key) => keys.push(*key),
+                    None => return,
+                }
+            }
+
+            if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
+                return;
+            }
             self.request(sender, dispatcher_queue_sender).await;
         }
     }
@@ -602,4 +596,3 @@ impl PracticalSimplex {
         let _ = dispatcher_queue_sender.send(request).await;
     }
 }
- */
