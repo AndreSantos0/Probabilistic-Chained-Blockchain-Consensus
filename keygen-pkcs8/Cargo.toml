@@ -1,9 +1,0 @@
-[package]
-name = "keygen-pkcs8"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-rand = "0.7"
-base64 = "0.22.1"
-ed25519-dalek = "1.0.1"
