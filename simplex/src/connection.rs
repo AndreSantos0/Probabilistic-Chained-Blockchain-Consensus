@@ -1,6 +1,6 @@
 use bincode::{serialize};
+use ed25519_dalek::{Keypair, Signer};
 use crate::message::SimplexMessage;
-use ring::signature::{Ed25519KeyPair};
 use log::{error};
 use rand::rngs::OsRng;
 use rand::TryRngCore;
@@ -19,7 +19,7 @@ pub fn generate_nonce() -> [u8; NONCE_BYTES_LENGTH] {
 }
 
 pub async fn broadcast<M: SimplexMessage>(
-    private_key: &Ed25519KeyPair,
+    private_key: &Keypair,
     connections: &mut Vec<Option<TcpStream>>,
     message: &M,
     enable_crypto: bool,
@@ -63,7 +63,7 @@ pub async fn broadcast<M: SimplexMessage>(
 }
 
 pub async fn broadcast_to_sample<M: SimplexMessage>(
-    private_key: &Ed25519KeyPair,
+    private_key: &Keypair,
     connections: &mut Vec<Option<TcpStream>>,
     message: &M,
     my_node_id: u32,
@@ -116,7 +116,7 @@ pub async fn broadcast_to_sample<M: SimplexMessage>(
 }
 
 pub async fn unicast<M: SimplexMessage>(
-    private_key: &Ed25519KeyPair,
+    private_key: &Keypair,
     connections: &mut Vec<Option<TcpStream>>,
     message: &M,
     recipient: u32,

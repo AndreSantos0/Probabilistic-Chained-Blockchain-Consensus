@@ -1,10 +1,10 @@
 use crate::block::{SimplexBlockHeader, NodeId, SimplexBlock, NotarizedBlock};
 use crate::message::{Dispatch, SimplexMessage};
-use ring::signature::{Ed25519KeyPair, UnparsedPublicKey};
 use shared::domain::environment::Environment;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use ed25519_dalek::{Keypair, PublicKey};
 use log::{error};
 use serde_json::to_string;
 use sha2::{Digest, Sha256};
@@ -32,7 +32,7 @@ pub trait Protocol {
 
     type Message: SimplexMessage;
 
-    fn new(environment: Environment, public_keys: HashMap<u32, UnparsedPublicKey<Vec<u8>>>, private_key: Ed25519KeyPair) -> Self;
+    fn new(environment: Environment, public_keys: HashMap<u32, PublicKey>, private_key: Keypair) -> Self;
     fn get_environment(&self) -> &Environment;
     fn get_iteration(&self) -> &Arc<AtomicU32>;
     fn get_is_timeout(&self) -> &Arc<AtomicBool>;

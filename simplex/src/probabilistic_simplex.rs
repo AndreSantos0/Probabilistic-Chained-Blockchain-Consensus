@@ -3,7 +3,6 @@ use crate::blockchain::Blockchain;
 use crate::connection::{broadcast, broadcast_to_sample, generate_nonce, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
 use crate::message::{Dispatch, ProbFinalize, ProbPropose, ProbVote, ProbabilisticSimplexMessage, Reply, Request, SimplexMessage, Timeout};
 use crate::protocol::Protocol;
-use ring::signature::{Ed25519KeyPair, UnparsedPublicKey};
 use sha2::{Digest, Sha256};
 use shared::domain::environment::Environment;
 use shared::transaction_generator::TransactionGenerator;
@@ -12,8 +11,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use bincode::{deserialize, serialize};
+use ed25519_dalek::{verify_batch, Keypair, PublicKey, Signature, Signer, Verifier};
 use log::{error, info, warn};
-use rand::{thread_rng, RngCore, SeedableRng};
+use rand::{rng, RngCore, SeedableRng};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rayon::prelude::*;
@@ -21,8 +21,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender};
 use shared::initializer::get_private_key;
-use futures::future::join_all;
-use tokio::task::JoinHandle;
 
 pub struct ProbabilisticSimplex {
     environment: Environment,
@@ -38,8 +36,8 @@ pub struct ProbabilisticSimplex {
     finalizes: HashMap<u32, Vec<u32>>,
     blockchain: Blockchain,
     transaction_generator: TransactionGenerator,
-    public_keys: HashMap<u32, UnparsedPublicKey<Vec<u8>>>,
-    private_key: Ed25519KeyPair,
+    public_keys: HashMap<u32, PublicKey>,
+    private_key: Keypair,
 }
 
 const CONST_O: f32 = 1.7;
@@ -50,7 +48,7 @@ impl Protocol for ProbabilisticSimplex {
 
     type Message = ProbabilisticSimplexMessage;
 
-    fn new(environment: Environment, public_keys: HashMap<u32, UnparsedPublicKey<Vec<u8>>>, private_key: Ed25519KeyPair) -> Self {
+    fn new(environment: Environment, public_keys: HashMap<u32, PublicKey>, private_key: Keypair) -> Self {
         let my_node_id = environment.my_node.id;
         let n = environment.nodes.len();
         let transaction_size = environment.transaction_size;
@@ -117,7 +115,7 @@ impl Protocol for ProbabilisticSimplex {
             let mut sig = vec![0u8; SIGNATURE_BYTES_LENGTH];
             stream.read_exact(&mut sig).await.expect(&format!("[Node {}] Failed reading during handshake", self.environment.my_node.id));
             if let Some(key) = self.public_keys.get(&claimed_id) {
-                if key.verify(&nonce, &sig).is_ok() {
+                if key.verify(&nonce, &Signature::from_bytes(&sig).unwrap()).is_ok() {
                     let sender = message_queue_sender.clone();
                     let enable_crypto = !self.environment.test_flag;
                     let my_node_id = self.environment.my_node.id;
@@ -261,7 +259,7 @@ impl ProbabilisticSimplex {
     async fn dispatch_message(
         message_queue_sender: &Sender<(NodeId, ProbabilisticSimplexMessage)>,
         content: Dispatch,
-        private_key: &Ed25519KeyPair,
+        private_key: &Keypair,
         enable_crypto: bool,
         sample_size: usize,
         n_nodes: usize,
@@ -296,7 +294,7 @@ impl ProbabilisticSimplex {
                     let mut possible_ids: Vec<u32> = (0..n_nodes as u32).collect();
                     possible_ids.retain(|&id| id != next_leader);
                     let mut seed = [0u8; 32];
-                    thread_rng().fill_bytes(&mut seed);
+                    rng().fill_bytes(&mut seed);
                     let mut rng = StdRng::from_seed(seed);
                     possible_ids.shuffle(&mut rng);
                     let mut sample: HashSet<u32> = possible_ids.into_iter().take(sample_size - 1).collect();
@@ -335,7 +333,7 @@ impl ProbabilisticSimplex {
                     let mut possible_ids: Vec<u32> = (0..n_nodes as u32).collect();
                     possible_ids.retain(|&id| id != next_leader);
                     let mut seed = [0u8; 32];
-                    thread_rng().fill_bytes(&mut seed);
+                    rng().fill_bytes(&mut seed);
                     let mut rng = StdRng::from_seed(seed);
                     possible_ids.shuffle(&mut rng);
                     let mut sample: HashSet<u32> = possible_ids.into_iter().take(sample_size - 1).collect();
@@ -364,7 +362,7 @@ impl ProbabilisticSimplex {
         enable_crypto: bool,
         mut stream: TcpStream,
         message_queue_sender: Sender<(NodeId, ProbabilisticSimplexMessage)>,
-        public_keys: &HashMap<u32, UnparsedPublicKey<Vec<u8>>>,
+        public_keys: &HashMap<u32, PublicKey>,
         sample_size: usize,
         n_nodes: usize,
         probabilistic_quorum_size: usize,
@@ -406,7 +404,7 @@ impl ProbabilisticSimplex {
                     }
                     (buffer, signature.as_ref())
                 };
-                if !public_key.verify(&payload, signature).is_ok() {
+                if !public_key.verify(&payload, &Signature::from_bytes(&signature).unwrap()).is_ok() {
                     continue;
                 }
 
@@ -454,24 +452,23 @@ impl ProbabilisticSimplex {
                                         continue;
                                     }
                                 };
-                                let all_verified = notarized.signatures
-                                    .par_iter()
-                                    .map(|vote_signature| {
-                                        if let Some(key) = public_keys.get(&vote_signature.node) {
-                                            match key.verify(&serialized_message, vote_signature.signature.as_ref()) {
-                                                Ok(_) => true,
-                                                Err(_) => {
-                                                    warn!("[Node {}] Failed to verify vote signature header during reply", my_node_id);
-                                                    false
-                                                }
-                                            }
-                                        } else {
-                                            false
-                                        }
-                                    })
-                                    .all(|verified| verified);
-                                if !all_verified { continue }
-                            }
+
+                                let messages: Vec<&[u8]> = (0..notarized.signatures.len()).map(|_| serialized_message.as_slice()).collect();
+                                let signatures: Vec<Signature>  = notarized.signatures.iter().map(
+                                    |vote_signature| Signature::from_bytes(vote_signature.signature.as_ref()).unwrap()
+                                ).collect();
+                                let mut keys = Vec::with_capacity(notarized.signatures.len());
+                                for vote_signature in &notarized.signatures {
+                                    match public_keys.get(&vote_signature.node) {
+                                        Some(key) => keys.push(*key),
+                                        None => continue,
+                                    }
+                                }
+
+                                if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
+                                    continue;
+                                }
+                            } else { continue }
                         }
                     }
                     _ => {}
@@ -517,38 +514,27 @@ impl ProbabilisticSimplex {
                     let block = self.proposes.get(&propose.last_notarized_iter).unwrap();
                     let header = SimplexBlockHeader::from(block);
                     if !self.environment.test_flag {
-                        let verify_futures = propose.last_notarized_cert.iter().map(|vote_signature| {
-                            let public_keys = self.public_keys.clone();
-                            let header = header.clone();
-                            let vote_signature = vote_signature.clone();
-                            tokio::task::spawn_blocking(move || {
-                                match public_keys.get(&vote_signature.node) {
-                                    Some(key) => {
-                                        let serialized_message = match serialize(&header) {
-                                            Ok(msg) => msg,
-                                            Err(e) => {
-                                                error!("Failed to serialize message: {}", e);
-                                                return false;
-                                            }
-                                        };
-                                        match key.verify(&serialized_message, vote_signature.signature.as_ref()) {
-                                            Ok(_) => true,
-                                            Err(_) => {
-                                                warn!("Propose Signature verification failed");
-                                                false
-                                            }
-                                        }
-                                    }
-                                    _ => { false }
-                                }
-                            })
-                        });
+                        let serialized_message = match serialize(&header) {
+                            Ok(msg) => msg,
+                            Err(e) => {
+                                error!("Failed to serialize message: {}", e);
+                                return;
+                            }
+                        };
 
-                        // Run all verifications concurrently, await results
-                        let results = join_all(verify_futures).await;
+                        let messages: Vec<&[u8]> = (0..propose.last_notarized_cert.len()).map(|_| serialized_message.as_slice()).collect();
+                        let signatures: Vec<Signature>  = propose.last_notarized_cert.iter().map(
+                            |vote_signature| Signature::from_bytes(vote_signature.signature.as_ref()).unwrap()
+                        ).collect();
+                        let mut keys = Vec::with_capacity(propose.last_notarized_cert.len());
+                        for vote_signature in &propose.last_notarized_cert {
+                            match self.public_keys.get(&vote_signature.node) {
+                                Some(key) => keys.push(*key),
+                                None => return,
+                            }
+                        }
 
-                        // Check if all signatures verified successfully
-                        if !results.into_iter().all(|res| res.unwrap_or(false)) {
+                        if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
                             return;
                         }
                     }

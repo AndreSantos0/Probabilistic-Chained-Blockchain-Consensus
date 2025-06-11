@@ -1,12 +1,12 @@
 use std::collections::HashSet;
+use ed25519_dalek::{Keypair, PublicKey, Signature, Signer, Verifier};
 use rand::{SeedableRng};
 use rand::seq::SliceRandom;
-use ring::signature::{Ed25519KeyPair, UnparsedPublicKey};
 use sha2::{Sha256, Digest};
 
 
 pub fn vrf_prove(
-    private_key: &Ed25519KeyPair,
+    private_key: &Keypair,
     seed: &str,
     sample_size: usize,
     s: u32,
@@ -32,7 +32,7 @@ pub fn vrf_prove(
 }
 
 pub fn vrf_verify(
-    public_key: &UnparsedPublicKey<Vec<u8>>,
+    public_key: &PublicKey,
     seed: &str,
     sample_size: usize,
     s: u32,
@@ -45,7 +45,7 @@ pub fn vrf_verify(
 
     let seed_bytes = seed.as_bytes();
 
-    if public_key.verify(seed_bytes, proof).is_err() {
+    if public_key.verify(seed_bytes, &Signature::from_bytes(proof).unwrap()).is_err() {
         return false;
     }
 
