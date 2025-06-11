@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = ["shared", "simplex", "keygen-pkcs8"]
+members = ["shared", "simplex",
+    #"keygen-pkcs8"
+]
 
 [lib]
 name = "shared"
