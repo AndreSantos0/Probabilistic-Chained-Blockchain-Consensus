@@ -1,31 +1,29 @@
+use std::collections::VecDeque;
 use bincode::serialize;
 use crate::domain::transaction::{Transaction};
 
 
 pub struct TransactionGenerator {
-    required_padding: usize,
-    n_transactions: usize,
+    pool: VecDeque<Transaction>,
 }
 
 impl TransactionGenerator {
-    pub fn new(target_size: usize, n_transactions: usize) -> Self {
+
+    pub fn new(target_size: usize, transactions_per_block: usize) -> Self {
         let mut padding_size = 0;
         loop {
             let tx = Transaction::new(padding_size);
             let size = serialize(&tx).unwrap().len();
             if size >= target_size {
-                break TransactionGenerator {
-                    required_padding: padding_size,
-                    n_transactions
-
-                };
+                break
             }
             padding_size += 1;
         }
+        let pool = (0..transactions_per_block * 10000).map(|i| Transaction::new(padding_size)).collect();
+        TransactionGenerator { pool }
     }
 
-    pub fn generate(&self) -> Vec<Transaction> {
-        let tx = Transaction::new(self.required_padding);
-        vec![tx; self.n_transactions]
+    pub fn poll(&mut self, transactions_per_block: usize) -> Vec<Transaction> {
+        (0..transactions_per_block).filter_map(|_| self.pool.pop_front()).collect()
     }
 }

@@ -159,7 +159,7 @@ impl Protocol for PracticalSimplex {
 
             let my_node_id = self.environment.my_node.id;
             if leader == my_node_id {
-                let transactions = self.transaction_generator.generate();
+                let transactions = self.transaction_generator.poll(self.environment.n_transactions);
                 let block = self.blockchain.get_next_block(iteration, transactions);
                 info!("Proposed {}", block.length);
                 let propose = self.create_proposal(block);
