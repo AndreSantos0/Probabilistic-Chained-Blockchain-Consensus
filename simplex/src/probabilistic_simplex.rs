@@ -654,7 +654,7 @@ impl ProbabilisticSimplex {
         reset_timer_sender: &Sender<()>,
         finalize_sender: &Sender<Vec<NotarizedBlock>>,
     ) {
-        info!("Received Reply");
+        info!("Received Reply {:?}", reply.blocks);
         let mut is_reset = false;
         for notarized in reply.blocks {
             if self.blockchain.is_missing(notarized.block.length, notarized.block.iteration) {

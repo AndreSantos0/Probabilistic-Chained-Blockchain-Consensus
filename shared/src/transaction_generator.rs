@@ -19,7 +19,7 @@ impl TransactionGenerator {
             }
             padding_size += 1;
         }
-        let pool = (0..transactions_per_block * 10000).map(|i| Transaction::new(padding_size)).collect();
+        let pool = (0..transactions_per_block * 10000).map(|_| Transaction::new(padding_size)).collect();
         TransactionGenerator { pool }
     }
 
