@@ -24,12 +24,8 @@ impl TransactionGenerator {
         }
     }
 
-    pub fn generate(&mut self) -> Vec<Transaction> {
-        let mut transactions = Vec::with_capacity(self.n_transactions);
-        for _ in 0..self.n_transactions {
-            let final_tx = Transaction::new(self.required_padding);
-            transactions.push(final_tx);
-        }
-        transactions
+    pub fn generate(&self) -> Vec<Transaction> {
+        let tx = Transaction::new(self.required_padding);
+        vec![tx; self.n_transactions]
     }
 }
