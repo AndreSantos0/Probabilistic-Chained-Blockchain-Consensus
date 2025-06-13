@@ -172,20 +172,6 @@ impl Protocol for PracticalSimplex {
                     let vote = Self::create_vote(iteration, block);
                     let _ = dispatcher_queue_sender.send(vote).await;
                 }
-                let header = SimplexBlockHeader::from(propose);
-                let votes = self.votes.get(&header);
-                if let Some(vote_signatures) = votes {
-                    if vote_signatures.len() >= self.quorum_size {
-                        let is_timeout = self.is_timeout.load(Ordering::Acquire);
-                        self.blockchain.notarize(header, propose.transactions.clone(), vote_signatures.to_vec(), finalize_sender).await;
-                        self.iteration.fetch_add(1, Ordering::AcqRel);
-                        if !is_timeout {
-                            let finalize = Self::create_finalize(iteration);
-                            let _ = dispatcher_queue_sender.send(finalize).await;
-                        }
-                        continue
-                    }
-                }
             }
 
             if self.get_timeouts(iteration + 1) >= self.quorum_size {
