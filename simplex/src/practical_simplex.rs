@@ -359,28 +359,30 @@ impl PracticalSimplex {
                             let hashed_transactions = Sha256::digest(&transactions_data).to_vec();
                             if hashed_transactions != notarized.block.transactions { continue }
                             if notarized.signatures.len() >= quorum_size {
-                                let serialized_message = match serialize(&notarized.block) {
-                                    Ok(msg) => msg,
-                                    Err(_) => {
-                                        error!("[Node {}] Failed to serialize vote signature header", my_node_id);
+                                if enable_crypto {
+                                    let serialized_message = match serialize(&notarized.block) {
+                                        Ok(msg) => msg,
+                                        Err(_) => {
+                                            error!("[Node {}] Failed to serialize vote signature header", my_node_id);
+                                            continue;
+                                        }
+                                    };
+
+                                    let messages: Vec<&[u8]> = (0..notarized.signatures.len()).map(|_| serialized_message.as_slice()).collect();
+                                    let signatures: Vec<Signature>  = notarized.signatures.iter().map(
+                                        |vote_signature| Signature::from_bytes(vote_signature.signature.as_ref()).unwrap()
+                                    ).collect();
+                                    let mut keys = Vec::with_capacity(notarized.signatures.len());
+                                    for vote_signature in &notarized.signatures {
+                                        match public_keys.get(&vote_signature.node) {
+                                            Some(key) => keys.push(*key),
+                                            None => continue,
+                                        }
+                                    }
+
+                                    if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
                                         continue;
                                     }
-                                };
-
-                                let messages: Vec<&[u8]> = (0..notarized.signatures.len()).map(|_| serialized_message.as_slice()).collect();
-                                let signatures: Vec<Signature>  = notarized.signatures.iter().map(
-                                    |vote_signature| Signature::from_bytes(vote_signature.signature.as_ref()).unwrap()
-                                ).collect();
-                                let mut keys = Vec::with_capacity(notarized.signatures.len());
-                                for vote_signature in &notarized.signatures {
-                                    match public_keys.get(&vote_signature.node) {
-                                        Some(key) => keys.push(*key),
-                                        None => continue,
-                                    }
-                                }
-
-                                if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
-                                    continue;
                                 }
                             } else { continue }
                         }
@@ -526,28 +528,30 @@ impl PracticalSimplex {
     ) {
         info!("Received view {}", view.last_notarized_block_header.length);
         if self.blockchain.is_missing(view.last_notarized_block_header.length, view.last_notarized_block_header.iteration) && view.last_notarized_block_cert.len() >= self.quorum_size {
-            let serialized_message = match serialize(&view.last_notarized_block_header) {
-                Ok(msg) => msg,
-                Err(_) => {
-                    error!("[Node {}] Failed to deserialize vote signature header", self.environment.my_node.id);
+            if !self.environment.test_flag {
+                let serialized_message = match serialize(&view.last_notarized_block_header) {
+                    Ok(msg) => msg,
+                    Err(_) => {
+                        error!("[Node {}] Failed to deserialize vote signature header", self.environment.my_node.id);
+                        return;
+                    }
+                };
+
+                let messages: Vec<&[u8]> = (0..view.last_notarized_block_cert.len()).map(|_| serialized_message.as_slice()).collect();
+                let signatures: Vec<Signature>  = view.last_notarized_block_cert.iter().map(
+                    |vote_signature| Signature::from_bytes(vote_signature.signature.as_ref()).unwrap()
+                ).collect();
+                let mut keys = Vec::with_capacity(view.last_notarized_block_cert.len());
+                for vote_signature in &view.last_notarized_block_cert {
+                    match self.public_keys.get(&vote_signature.node) {
+                        Some(key) => keys.push(*key),
+                        None => return,
+                    }
+                }
+
+                if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
                     return;
                 }
-            };
-
-            let messages: Vec<&[u8]> = (0..view.last_notarized_block_cert.len()).map(|_| serialized_message.as_slice()).collect();
-            let signatures: Vec<Signature>  = view.last_notarized_block_cert.iter().map(
-                |vote_signature| Signature::from_bytes(vote_signature.signature.as_ref()).unwrap()
-            ).collect();
-            let mut keys = Vec::with_capacity(view.last_notarized_block_cert.len());
-            for vote_signature in &view.last_notarized_block_cert {
-                match self.public_keys.get(&vote_signature.node) {
-                    Some(key) => keys.push(*key),
-                    None => return,
-                }
-            }
-
-            if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
-                return;
             }
             self.request(sender, dispatcher_queue_sender).await;
         }

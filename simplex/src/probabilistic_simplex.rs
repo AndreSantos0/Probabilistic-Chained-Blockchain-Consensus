@@ -458,28 +458,30 @@ impl ProbabilisticSimplex {
                             let hashed_transactions = Sha256::digest(&transactions_data).to_vec();
                             if hashed_transactions != notarized.block.transactions { continue }
                             if notarized.signatures.len() >= probabilistic_quorum_size {
-                                let serialized_message = match serialize(&notarized.block) {
-                                    Ok(msg) => msg,
-                                    Err(_) => {
-                                        error!("[Node {}] Failed to serialize vote signature header", my_node_id);
+                                if enable_crypto {
+                                    let serialized_message = match serialize(&notarized.block) {
+                                        Ok(msg) => msg,
+                                        Err(_) => {
+                                            error!("[Node {}] Failed to serialize vote signature header", my_node_id);
+                                            continue;
+                                        }
+                                    };
+
+                                    let messages: Vec<&[u8]> = (0..notarized.signatures.len()).map(|_| serialized_message.as_slice()).collect();
+                                    let signatures: Vec<Signature>  = notarized.signatures.iter().map(
+                                        |vote_signature| Signature::from_bytes(vote_signature.signature.as_ref()).unwrap()
+                                    ).collect();
+                                    let mut keys = Vec::with_capacity(notarized.signatures.len());
+                                    for vote_signature in &notarized.signatures {
+                                        match public_keys.get(&vote_signature.node) {
+                                            Some(key) => keys.push(*key),
+                                            None => continue,
+                                        }
+                                    }
+
+                                    if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
                                         continue;
                                     }
-                                };
-
-                                let messages: Vec<&[u8]> = (0..notarized.signatures.len()).map(|_| serialized_message.as_slice()).collect();
-                                let signatures: Vec<Signature>  = notarized.signatures.iter().map(
-                                    |vote_signature| Signature::from_bytes(vote_signature.signature.as_ref()).unwrap()
-                                ).collect();
-                                let mut keys = Vec::with_capacity(notarized.signatures.len());
-                                for vote_signature in &notarized.signatures {
-                                    match public_keys.get(&vote_signature.node) {
-                                        Some(key) => keys.push(*key),
-                                        None => continue,
-                                    }
-                                }
-
-                                if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
-                                    continue;
                                 }
                             } else { continue }
                         }
