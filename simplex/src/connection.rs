@@ -4,6 +4,7 @@ use crate::message::SimplexMessage;
 use log::{error};
 use rand::rngs::OsRng;
 use rand::TryRngCore;
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncWriteExt};
 use tokio::net::{TcpStream};
 
@@ -35,6 +36,11 @@ pub async fn broadcast<M: SimplexMessage>(
     let length_bytes = (payload.len() as u32).to_be_bytes();
     let signature = if message.is_vote() || !enable_crypto {
         None
+    } else if message.is_propose() {
+        let mut hasher = Sha256::new();
+        hasher.update(&payload);
+        let digest = hasher.finalize();
+        Some(private_key.sign(&digest))
     } else {
         Some(private_key.sign(&payload))
     };
@@ -80,6 +86,11 @@ pub async fn broadcast_to_sample<M: SimplexMessage>(
     let length_bytes = (payload.len() as u32).to_be_bytes();
     let signature = if message.is_vote() || !enable_crypto {
         None
+    } else if message.is_propose() {
+        let mut hasher = Sha256::new();
+        hasher.update(&payload);
+        let digest = hasher.finalize();
+        Some(private_key.sign(&digest))
     } else {
         Some(private_key.sign(&payload))
     };
@@ -134,6 +145,11 @@ pub async fn unicast<M: SimplexMessage>(
     let length_bytes = (payload.len() as u32).to_be_bytes();
     let signature = if message.is_vote() || !enable_crypto {
         None
+    } else if message.is_propose() {
+        let mut hasher = Sha256::new();
+        hasher.update(&payload);
+        let digest = hasher.finalize();
+        Some(private_key.sign(&digest))
     } else {
         Some(private_key.sign(&payload))
     };

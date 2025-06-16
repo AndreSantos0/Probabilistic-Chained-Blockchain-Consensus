@@ -1,4 +1,4 @@
-use crate::block::{SimplexBlockHeader, SimplexBlock, VoteSignature, NodeId, NotarizedBlock, Iteration, BlockchainBlock, hash};
+use crate::block::{SimplexBlockHeader, SimplexBlock, VoteSignature, NodeId, NotarizedBlock, Iteration, hash};
 use crate::connection::{broadcast, broadcast_to_sample, generate_nonce, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
 use crate::message::{Dispatch, ProbFinalize, ProbPropose, ProbVote, ProbabilisticSimplexMessage, Reply, Request, SimplexMessage, Timeout};
 use crate::protocol::Protocol;
@@ -15,8 +15,7 @@ use log::{error, info, warn};
 use rand::{rng, RngCore, SeedableRng};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use tokio::fs::File;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender};
 use shared::domain::transaction::Transaction;
@@ -402,6 +401,15 @@ impl ProbabilisticSimplex {
                 let (payload, signature) = if message.is_vote() {
                     (message.get_vote_header_bytes().expect(&format!("[Node {}] Error reading message signature from Node {}", my_node_id, node_id)),
                      message.get_signature_bytes().unwrap_or_default())
+                } else if message.is_propose() {
+                    if stream.read_exact(&mut signature).await.is_err() {
+                        error!("[Node {}] Error reading message signature from Node {}", my_node_id, node_id);
+                        return;
+                    }
+                    let mut hasher = Sha256::new();
+                    hasher.update(&buffer);
+                    let digest = hasher.finalize();
+                    (digest.to_vec(), signature.as_ref())
                 } else {
                     if stream.read_exact(&mut signature).await.is_err() {
                         error!("[Node {}] Error reading message signature from Node {}", my_node_id, node_id);
@@ -516,8 +524,6 @@ impl ProbabilisticSimplex {
                     }
                 }
             }
-
-
 
             if propose.content.iteration > iteration {
                 if self.proposes.contains_key(&propose.last_notarized_iter) && propose.last_notarized_cert.len() >= self.probabilistic_quorum_size {
@@ -760,38 +766,7 @@ impl ProbabilisticSimplex {
         let _ = finalize_sender.send(blocks_to_be_finalized.into_iter().rev().collect()).await;
     }
 
-    async fn get_missing(&self, from_length: u32, sender: NodeId, dispatcher_queue_sender: &Sender<Dispatch>) {
-        /*
-        let dispatcher_queue_sender = dispatcher_queue_sender.clone();
-        let last_length = self.last_notarized().0.length;
-        let node_id = self.environment.my_node.id;
-
-        let mut missing = Vec::new();
-        for curr_length in from_length ..= last_length {
-
-
-            if blocks.is_empty() && curr_length != GENESIS_LENGTH {
-                match Self::get_finalized_block(node_id, curr_length).await {
-                    Some(notarized) => {
-                        missing.push(notarized);
-                    }
-                    None => {
-                        break
-                    }
-                }
-            } else {
-                missing.append(&mut blocks);
-            }
-        }
-
-
-        tokio::spawn(async move {
-
-
-            if missing.is_empty() { return }
-            let reply = Dispatch::Reply(missing, sender);
-            let _ = dispatcher_queue_sender.send(reply).await;
-        });
-         */
+    async fn get_missing(&self, _from_length: u32, _sender: NodeId, _dispatcher_queue_sender: &Sender<Dispatch>) {
+       //TODO
     }
 }

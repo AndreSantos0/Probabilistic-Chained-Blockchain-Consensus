@@ -24,6 +24,7 @@ pub const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks_";
 
 pub trait Protocol {
 
+    const EXECUTION_TIME_SECS: u64 = 60;
     const MESSAGE_CHANNEL_SIZE: usize = 1000;
     const RESET_TIMER_CHANNEL_SIZE: usize = 100;
     const SOCKET_BINDING_DELAY: u64 = 5;
@@ -125,7 +126,7 @@ pub trait Protocol {
     ) {
         let start = tokio::time::Instant::now();
         self.handle_iteration_advance(&dispatcher_queue_sender, &reset_timer_sender, &finalize_sender).await;
-        while start.elapsed() < Duration::from_secs(60) {
+        while start.elapsed() < Duration::from_secs(Self::EXECUTION_TIME_SECS) {
             if let Some((sender, message)) = consumer_queue_receiver.recv().await {
                 self.handle_message(sender, message, &dispatcher_queue_sender, &reset_timer_sender, &finalize_sender).await;
             }

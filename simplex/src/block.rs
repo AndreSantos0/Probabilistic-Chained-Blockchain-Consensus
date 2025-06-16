@@ -28,12 +28,6 @@ pub struct VoteSignature {
 }
 
 #[derive(Hash, Eq, PartialEq, Clone, serde::Serialize, serde::Deserialize, Debug)]
-pub struct BlockchainBlock {
-    pub header: SimplexBlockHeader,
-    pub signatures: Vec<VoteSignature>,
-}
-
-#[derive(Hash, Eq, PartialEq, Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct NotarizedBlock {
     pub header: SimplexBlockHeader,
     pub signatures: Vec<VoteSignature>,

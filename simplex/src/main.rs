@@ -1,4 +1,3 @@
-mod blockchain;
 mod message;
 mod block;
 mod connection;
