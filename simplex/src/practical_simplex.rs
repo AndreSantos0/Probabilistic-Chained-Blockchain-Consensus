@@ -1,3 +1,4 @@
+/*
 use crate::block::{NodeId, NotarizedBlock, SimplexBlock, SimplexBlockHeader, VoteSignature};
 use crate::blockchain::Blockchain;
 use crate::connection::{broadcast, generate_nonce, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
@@ -166,7 +167,7 @@ impl Protocol for PracticalSimplex {
                 let _ = dispatcher_queue_sender.send(propose).await;
             }
 
-            if let Some(propose) = self.get_proposal_block(iteration) {
+            if let Some(propose) = self.get_proposal(iteration) {
                 if !self.is_timeout.load(Ordering::Acquire) && self.blockchain.is_extendable(propose) {
                     let block = SimplexBlockHeader::from(propose);
                     let vote = Self::create_vote(iteration, block);
@@ -183,13 +184,13 @@ impl Protocol for PracticalSimplex {
                 None => break,
                 Some(notarized) => {
                     let propose = self.proposes.remove(&iteration).unwrap();
-                    self.blockchain.notarize(notarized.block.clone(), propose.content.transactions, notarized.signatures.clone(), finalize_sender).await;
+                    self.blockchain.notarize(notarized.header.clone(), propose.content.transactions, notarized.signatures.clone(), finalize_sender).await;
                     self.iteration.fetch_add(1, Ordering::AcqRel);
                     if !self.is_timeout.load(Ordering::Acquire) {
                         let finalize = Self::create_finalize(iteration);
                         let _ = dispatcher_queue_sender.send(finalize).await;
                     }
-                    let _ = dispatcher_queue_sender.send(Dispatch::View(notarized.block, notarized.signatures)).await;
+                    let _ = dispatcher_queue_sender.send(Dispatch::View(notarized.header, notarized.signatures)).await;
                 }
             }
         }
@@ -223,7 +224,7 @@ impl Protocol for PracticalSimplex {
         Dispatch::Finalize(iteration)
     }
 
-    fn get_proposal_block(&self, iteration: u32) -> Option<&SimplexBlock> {
+    fn get_proposal(&self, iteration: u32) -> Option<&SimplexBlock> {
         self.proposes.get(&iteration).map(|propose| &propose.content)
     }
 
@@ -357,10 +358,10 @@ impl PracticalSimplex {
                                 }
                             };
                             let hashed_transactions = Sha256::digest(&transactions_data).to_vec();
-                            if hashed_transactions != notarized.block.transactions { continue }
+                            if hashed_transactions != notarized.header.transactions { continue }
                             if notarized.signatures.len() >= quorum_size {
                                 if enable_crypto {
-                                    let serialized_message = match serialize(&notarized.block) {
+                                    let serialized_message = match serialize(&notarized.header) {
                                         Ok(msg) => msg,
                                         Err(_) => {
                                             error!("[Node {}] Failed to serialize vote signature header", my_node_id);
@@ -572,18 +573,18 @@ impl PracticalSimplex {
         info!("Received Reply {:?}", reply.blocks);
         let mut is_reset = false;
         for notarized in reply.blocks {
-            if self.blockchain.is_missing(notarized.block.length, notarized.block.iteration) {
+            if self.blockchain.is_missing(notarized.header.length, notarized.header.iteration) {
                 let iteration = self.iteration.load(Ordering::Acquire);
-                if let Some(_) = self.blockchain.find_parent_block(&notarized.block.hash) {
-                    self.blockchain.notarize(notarized.block.clone(), notarized.transactions, notarized.signatures.clone(), finalize_sender).await;
-                    if notarized.block.iteration == iteration {
+                if let Some(_) = self.blockchain.find_parent_block(&notarized.header.hash) {
+                    self.blockchain.notarize(notarized.header.clone(), notarized.transactions, notarized.signatures.clone(), finalize_sender).await;
+                    if notarized.header.iteration == iteration {
                         is_reset = true;
-                        self.iteration.swap(notarized.block.iteration + 1, Ordering::AcqRel);
+                        self.iteration.swap(notarized.header.iteration + 1, Ordering::AcqRel);
                         if !self.is_timeout.load(Ordering::Acquire) {
                             let finalize = Self::create_finalize(iteration);
                             let _ = dispatcher_queue_sender.send(finalize).await;
                         }
-                        let view = Dispatch::View(notarized.block, notarized.signatures);
+                        let view = Dispatch::View(notarized.header, notarized.signatures);
                         let _ = dispatcher_queue_sender.send(view).await;
                         self.handle_iteration_advance(dispatcher_queue_sender, finalize_sender).await;
                     }
@@ -596,7 +597,8 @@ impl PracticalSimplex {
     }
 
     async fn request(&self, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
-        let request = Dispatch::Request(self.blockchain.last_notarized().block.length, sender);
+        let request = Dispatch::Request(self.blockchain.last_notarized().header.length, sender);
         let _ = dispatcher_queue_sender.send(request).await;
     }
 }
+ */

@@ -28,8 +28,14 @@ pub struct VoteSignature {
 }
 
 #[derive(Hash, Eq, PartialEq, Clone, serde::Serialize, serde::Deserialize, Debug)]
+pub struct BlockchainBlock {
+    pub header: SimplexBlockHeader,
+    pub signatures: Vec<VoteSignature>,
+}
+
+#[derive(Hash, Eq, PartialEq, Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct NotarizedBlock {
-    pub block: SimplexBlockHeader,
+    pub header: SimplexBlockHeader,
     pub signatures: Vec<VoteSignature>,
     pub transactions: Vec<Transaction>,
 }
@@ -50,4 +56,11 @@ impl From<&SimplexBlock> for SimplexBlockHeader {
         let hashed_transactions = hasher.finalize().to_vec();
         SimplexBlockHeader { hash: block.hash.clone(), iteration: block.iteration, length: block.length, transactions: hashed_transactions }
     }
+}
+
+pub fn hash(header: &SimplexBlockHeader) -> Vec<u8> {
+    let block_data = serialize(header).expect("Failed to serialize block header");
+    let mut hasher = Sha256::new();
+    hasher.update(&block_data);
+    hasher.finalize().to_vec()
 }

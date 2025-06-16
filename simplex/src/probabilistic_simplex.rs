@@ -1,5 +1,4 @@
-use crate::block::{SimplexBlockHeader, SimplexBlock, VoteSignature, NodeId, NotarizedBlock};
-use crate::blockchain::Blockchain;
+use crate::block::{SimplexBlockHeader, SimplexBlock, VoteSignature, NodeId, NotarizedBlock, Iteration, BlockchainBlock, hash};
 use crate::connection::{broadcast, broadcast_to_sample, generate_nonce, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
 use crate::message::{Dispatch, ProbFinalize, ProbPropose, ProbVote, ProbabilisticSimplexMessage, Reply, Request, SimplexMessage, Timeout};
 use crate::protocol::Protocol;
@@ -16,9 +15,11 @@ use log::{error, info, warn};
 use rand::{rng, RngCore, SeedableRng};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::fs::File;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender};
+use shared::domain::transaction::Transaction;
 use shared::initializer::get_private_key;
 
 pub struct ProbabilisticSimplex {
@@ -29,13 +30,15 @@ pub struct ProbabilisticSimplex {
     iteration: Arc<AtomicU32>,
     is_timeout: Arc<AtomicBool>,
     blocks_finalized: usize,
-    proposes: HashMap<u32, SimplexBlock>,
+    proposes: HashMap<Iteration, SimplexBlockHeader>,
+    transactions: HashMap<Iteration, Vec<Transaction>>,
     votes: HashMap<SimplexBlockHeader, Vec<VoteSignature>>,
-    timeouts: HashMap<u32, Vec<u32>>,
-    finalizes: HashMap<u32, Vec<u32>>,
-    blockchain: Blockchain,
+    timeouts: HashMap<Iteration, Vec<NodeId>>,
+    finalizes: HashMap<Iteration, Vec<NodeId>>,
+    finalized_height: Iteration,
+    to_be_finalized: Vec<Iteration>,
     transaction_generator: TransactionGenerator,
-    public_keys: HashMap<u32, PublicKey>,
+    public_keys: HashMap<NodeId, PublicKey>,
     private_key: Keypair,
 }
 
@@ -48,11 +51,10 @@ impl Protocol for ProbabilisticSimplex {
     type Message = ProbabilisticSimplexMessage;
 
     fn new(environment: Environment, public_keys: HashMap<u32, PublicKey>, private_key: Keypair) -> Self {
-        let my_node_id = environment.my_node.id;
         let n = environment.nodes.len();
         let transaction_size = environment.transaction_size;
         let n_transactions = environment.n_transactions;
-        ProbabilisticSimplex {
+        let mut protocol = ProbabilisticSimplex {
             environment,
             quorum_size: n * 2 / 3 + 1,
             probabilistic_quorum_size: (CONST_L * (n as f32).sqrt()).floor() as usize,
@@ -61,14 +63,18 @@ impl Protocol for ProbabilisticSimplex {
             is_timeout: Arc::new(AtomicBool::new(false)),
             blocks_finalized: 0,
             proposes: HashMap::new(),
+            transactions: HashMap::new(),
             votes: HashMap::new(),
             timeouts: HashMap::new(),
             finalizes: HashMap::new(),
-            blockchain: Blockchain::new(my_node_id),
+            finalized_height: Self::INITIAL_FINALIZED_HEIGHT,
+            to_be_finalized: Vec::new(),
             transaction_generator: TransactionGenerator::new(transaction_size, n_transactions),
             public_keys,
             private_key
-        }
+        };
+        protocol.add_genesis_block();
+        protocol
     }
 
     fn get_environment(&self) -> &Environment {
@@ -161,7 +167,12 @@ impl Protocol for ProbabilisticSimplex {
         });
     }
 
-    async fn handle_iteration_advance(&mut self, dispatcher_queue_sender: &Sender<Dispatch>, finalize_sender: &Sender<Vec<NotarizedBlock>>) {
+    async fn handle_iteration_advance(
+        &mut self,
+        dispatcher_queue_sender: &Sender<Dispatch>,
+        reset_timer_sender: &Sender<()>,
+        finalize_sender: &Sender<Vec<NotarizedBlock>>
+    ) {
         loop {
             let iteration = self.iteration.load(Ordering::Acquire);
             let leader = Self::get_leader(self.environment.nodes.len(), iteration);
@@ -170,34 +181,25 @@ impl Protocol for ProbabilisticSimplex {
             info!("----------------------");
             info!("----------------------");
             info!("Leader is node {} | Iteration: {}", leader, iteration);
-            //self.blockchain().print();
 
             let my_node_id = self.environment.my_node.id;
             if leader == my_node_id {
                 let transactions = self.transaction_generator.poll(self.environment.n_transactions);
-                let block = self.blockchain.get_next_block(iteration, transactions);
+                let block = self.get_next_block(iteration, transactions);
                 info!("Proposed {}", block.length);
                 let propose = self.create_proposal(block);
                 let _ = dispatcher_queue_sender.send(propose).await;
             }
 
-            if let Some(propose) = self.get_proposal_block(iteration) {
-                if !self.is_timeout.load(Ordering::Acquire) && self.blockchain.is_extendable(propose) {
-                    let block = SimplexBlockHeader::from(propose);
-                    let vote = Self::create_vote(iteration, block);
+            if let Some(propose_header) = self.get_proposal(iteration) {
+                if !self.is_timeout.load(Ordering::Acquire) && self.is_extendable(propose_header) {
+                    let vote = Self::create_vote(iteration, propose_header.clone());
                     let _ = dispatcher_queue_sender.send(vote).await;
                 }
-                let header = SimplexBlockHeader::from(propose);
-                let votes = self.votes.get(&header);
+                let votes = self.votes.get(&propose_header);
                 if let Some(vote_signatures) = votes {
                     if vote_signatures.len() >= self.probabilistic_quorum_size {
-                        let is_timeout = self.is_timeout.load(Ordering::Acquire);
-                        self.blockchain.notarize(header, propose.transactions.clone(), vote_signatures.to_vec(), finalize_sender).await;
-                        self.iteration.fetch_add(1, Ordering::AcqRel);
-                        if !is_timeout {
-                            let finalize = Self::create_finalize(iteration);
-                            let _ = dispatcher_queue_sender.send(finalize).await;
-                        }
+                        self.handle_notarization(propose_header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                         continue
                     }
                 }
@@ -205,21 +207,11 @@ impl Protocol for ProbabilisticSimplex {
 
             if self.get_timeouts(iteration + 1) >= self.quorum_size {
                 self.iteration.store(iteration + 1, Ordering::Release);
-                continue;
+                let _ = reset_timer_sender.send(()).await;
+                continue
             }
 
-            match self.blockchain.check_for_possible_notarization(iteration) {
-                None => break,
-                Some(notarized) => {
-                    let propose = self.proposes.get(&iteration).unwrap();
-                    self.blockchain.notarize(notarized.block, propose.transactions.clone(), notarized.signatures, finalize_sender).await;
-                    self.iteration.fetch_add(1, Ordering::AcqRel);
-                    if !self.is_timeout.load(Ordering::Acquire) {
-                        let finalize = Self::create_finalize(iteration);
-                        let _ = dispatcher_queue_sender.send(finalize).await;
-                    }
-                }
-            }
+            break
         }
     }
 
@@ -235,8 +227,8 @@ impl Protocol for ProbabilisticSimplex {
     }
 
     fn create_proposal(&self, block: SimplexBlock) -> Dispatch {
-        let last_notarized = self.blockchain.last_notarized();
-        Dispatch::ProbPropose(block, last_notarized.block.iteration, last_notarized.signatures.clone())
+        let (header, signatures) = self.last_notarized();
+        Dispatch::ProbPropose(block, header.iteration, signatures.clone())
     }
 
     fn create_timeout(next_iteration: u32) -> Dispatch {
@@ -251,7 +243,7 @@ impl Protocol for ProbabilisticSimplex {
         Dispatch::Finalize(iteration)
     }
 
-    fn get_proposal_block(&self, iteration: u32) -> Option<&SimplexBlock> {
+    fn get_proposal(&self, iteration: u32) -> Option<&SimplexBlockHeader> {
         self.proposes.get(&iteration)
     }
 
@@ -456,10 +448,10 @@ impl ProbabilisticSimplex {
                                 }
                             };
                             let hashed_transactions = Sha256::digest(&transactions_data).to_vec();
-                            if hashed_transactions != notarized.block.transactions { continue }
+                            if hashed_transactions != notarized.header.transactions { continue }
                             if notarized.signatures.len() >= probabilistic_quorum_size {
                                 if enable_crypto {
-                                    let serialized_message = match serialize(&notarized.block) {
+                                    let serialized_message = match serialize(&notarized.header) {
                                         Ok(msg) => msg,
                                         Err(_) => {
                                             error!("[Node {}] Failed to serialize vote signature header", my_node_id);
@@ -493,43 +485,45 @@ impl ProbabilisticSimplex {
         }
     }
 
-    async fn handle_propose(&mut self, propose: ProbPropose, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>, reset_timer_sender: &Sender<()>, finalize_sender: &Sender<Vec<NotarizedBlock>>) {
+    async fn handle_propose(
+        &mut self,
+        propose: ProbPropose,
+        sender: u32,
+        dispatcher_queue_sender: &Sender<Dispatch>,
+        reset_timer_sender: &Sender<()>,
+        finalize_sender: &Sender<Vec<NotarizedBlock>>
+    ) {
         info!("Received propose {}", propose.content.length);
         let leader = Self::get_leader(self.environment.nodes.len(), propose.content.iteration);
         if !self.proposes.contains_key(&propose.content.iteration) && sender == leader {
             let iteration = self.iteration.load(Ordering::Acquire);
-            let is_extendable = self.blockchain.is_extendable(&propose.content);
-            self.proposes.insert(propose.content.iteration, propose.content.clone());
+            let header = SimplexBlockHeader::from(&propose.content);
+            let is_extendable = self.is_extendable(&header);
+
+            self.proposes.insert(propose.content.iteration, header.clone());
+            self.transactions.insert(propose.content.iteration, propose.content.transactions);
+
             if propose.content.iteration == iteration {
                 if is_extendable && !self.is_timeout.load(Ordering::Acquire) {
-                    let block = SimplexBlockHeader::from(&propose.content);
-                    let vote = Self::create_vote(iteration, block);
+                    let vote = Self::create_vote(iteration, header.clone());
                     let _ = dispatcher_queue_sender.send(vote).await;
-                }
-                let header = SimplexBlockHeader::from(&propose.content);
+                };
                 let votes = self.votes.get(&header);
                 if let Some(vote_signatures) = votes {
                     if vote_signatures.len() >= self.probabilistic_quorum_size {
-                        let is_timeout = self.is_timeout.load(Ordering::Acquire);
-                        self.blockchain.notarize(header, propose.content.transactions, vote_signatures.to_vec(), finalize_sender).await;
-                        self.iteration.fetch_add(1, Ordering::AcqRel);
-                        if !is_timeout {
-                            let finalize = Self::create_finalize(iteration);
-                            let _ = dispatcher_queue_sender.send(finalize).await;
-                        }
-                        self.handle_iteration_advance(dispatcher_queue_sender, finalize_sender).await;
-                        let _ = reset_timer_sender.send(()).await;
-                        //return;
+                        self.handle_notarization(header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                        self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                     }
                 }
             }
 
+
+
             if propose.content.iteration > iteration {
                 if self.proposes.contains_key(&propose.last_notarized_iter) && propose.last_notarized_cert.len() >= self.probabilistic_quorum_size {
-                    let block = self.proposes.get(&propose.last_notarized_iter).unwrap();
-                    let header = SimplexBlockHeader::from(block);
+                    let last_notarized_header = self.proposes.get(&propose.last_notarized_iter).unwrap();
                     if !self.environment.test_flag {
-                        let serialized_message = match serialize(&header) {
+                        let serialized_message = match serialize(last_notarized_header) {
                             Ok(msg) => msg,
                             Err(e) => {
                                 error!("Failed to serialize message: {}", e);
@@ -554,17 +548,10 @@ impl ProbabilisticSimplex {
                         }
                     }
 
+                    self.votes.insert(last_notarized_header.clone(), propose.last_notarized_cert);
                     if iteration == propose.last_notarized_iter {
-                        let is_timeout = self.is_timeout.load(Ordering::SeqCst);
-                        //let block = self.proposes.remove(&propose.last_notarized_iter).unwrap();
-                        self.blockchain.notarize(header, block.transactions.clone(), propose.last_notarized_cert, finalize_sender).await;
-                        self.iteration.fetch_add(1, Ordering::SeqCst);
-                        if !is_timeout {
-                            let finalize = Self::create_finalize(iteration);
-                            let _ = dispatcher_queue_sender.send(finalize).await;
-                        }
-                        self.handle_iteration_advance(dispatcher_queue_sender, finalize_sender).await;
-                        let _ = reset_timer_sender.send(()).await;
+                        self.handle_notarization(last_notarized_header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                        self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                     } else {
                         self.request(sender, dispatcher_queue_sender).await;
                     }
@@ -587,32 +574,13 @@ impl ProbabilisticSimplex {
         if is_first_vote {
             vote_signatures.push(VoteSignature { signature: vote.signature, node: sender });
             info!("{} signatures", vote_signatures.len());
-            let iteration = self.iteration.load(Ordering::Acquire);
             if vote_signatures.len() == self.probabilistic_quorum_size {
                 match self.proposes.get(&vote.iteration) {
                     None => return,
-                    Some(block) => {
-                        let is_timeout = self.is_timeout.load(Ordering::Acquire);
-                        if vote.iteration == iteration {
-                            //let block = self.proposes.remove(&vote.iteration).unwrap();
-                            self.blockchain.notarize(
-                                SimplexBlockHeader::from(block),
-                                block.transactions.clone(),
-                                vote_signatures.to_vec(),
-                                finalize_sender
-                            ).await;
-                            self.iteration.fetch_add(1, Ordering::AcqRel);
-                            if !is_timeout {
-                                let finalize = Self::create_finalize(iteration);
-                                let _ = dispatcher_queue_sender.send(finalize).await;
-                            }
-                            self.handle_iteration_advance(dispatcher_queue_sender, finalize_sender).await;
-                            let _ = reset_timer_sender.send(()).await;
-                        } else if vote.iteration > iteration {
-                            self.blockchain.add_to_be_notarized(
-                                SimplexBlockHeader::from(block),
-                                vote_signatures.to_vec()
-                            );
+                    Some(header) => {
+                        if vote.iteration == self.iteration.load(Ordering::Acquire) {
+                            self.handle_notarization(header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                            self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                         }
                     }
                 }
@@ -622,18 +590,25 @@ impl ProbabilisticSimplex {
 
     async fn handle_timeout(&mut self, timeout: Timeout, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>, reset_timer_sender: &Sender<()>, finalize_sender: &Sender<Vec<NotarizedBlock>>) {
         info!("Received timeout {}", timeout.next_iter);
-        let timeouts = self.timeouts.entry(timeout.next_iter).or_insert_with(Vec::new);
-        let is_first_timeout = !timeouts.iter().any(|node_id| *node_id == sender);
-        if is_first_timeout {
-            timeouts.push(sender);
-            info!("{} matching timeouts for iter {}", timeouts.len(), timeout.next_iter);
-            if let Some(notarized) = self.blockchain.get_block(timeout.next_iter - 1) {
-                self.blockchain.get_missing(notarized.block.length, sender, dispatcher_queue_sender).await;
+        let is_first_timeout = {
+            let timeouts = self.timeouts.entry(timeout.next_iter).or_insert_with(Vec::new);
+            let is_first = !timeouts.iter().any(|node_id| *node_id == sender);
+            if is_first {
+                timeouts.push(sender);
+                info!("{} matching timeouts for iter {}", timeouts.len(), timeout.next_iter);
             }
-            if timeouts.len() == self.quorum_size && timeout.next_iter == self.iteration.load(Ordering::Acquire) + 1 {
-                self.iteration.store(timeout.next_iter, Ordering::Release);
-                self.handle_iteration_advance(dispatcher_queue_sender, finalize_sender).await;
-                let _ = reset_timer_sender.send(()).await;
+            is_first
+        };
+        if is_first_timeout {
+            if let Some((header, _)) = self.get_notarized(timeout.next_iter - 1) {
+                self.get_missing(header.length, sender, dispatcher_queue_sender).await;
+            }
+            if let Some(timeouts) = self.timeouts.get(&timeout.next_iter) {
+                if timeouts.len() == self.quorum_size && timeout.next_iter == self.iteration.load(Ordering::Acquire) + 1 {
+                    self.iteration.store(timeout.next_iter, Ordering::Release);
+                    let _ = reset_timer_sender.send(()).await;
+                    self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                }
             }
         }
     }
@@ -644,15 +619,13 @@ impl ProbabilisticSimplex {
         let is_first_finalize = !finalizes.iter().any(|node_id| *node_id == sender);
         if is_first_finalize {
             finalizes.push(sender);
-            if finalizes.len() == self.probabilistic_quorum_size {
-                if let Some(_) = self.blockchain.get_block(finalize.iter) {
-                    let blocks_finalized = self.blockchain.finalize(finalize.iter, finalize_sender).await;
-                    self.blocks_finalized += blocks_finalized;
+            if finalizes.len() == self.probabilistic_quorum_size && self.finalized_height < finalize.iter {
+                if let Some(_) = self.get_notarized(finalize.iter) {
+                    self.finalize(finalize.iter, finalize_sender).await;
                     self.proposes.retain(|iteration, _| *iteration + FINALIZATION_GAP > finalize.iter);
-                    self.votes.retain(|_, signatures| signatures.len() < self.probabilistic_quorum_size);
                     self.finalizes.retain(|iteration, _| *iteration > finalize.iter);
                 } else {
-                    self.blockchain.add_to_be_finalized(finalize.iter);
+                    self.to_be_finalized.push(finalize.iter);
                 }
             }
         }
@@ -660,7 +633,7 @@ impl ProbabilisticSimplex {
 
     async fn handle_request(&self, request: Request, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
         info!("Request received");
-        self.blockchain.get_missing(request.last_notarized_length, sender, dispatcher_queue_sender).await;
+        self.get_missing(request.last_notarized_length, sender, dispatcher_queue_sender).await;
     }
 
     async fn handle_reply(
@@ -671,33 +644,154 @@ impl ProbabilisticSimplex {
         finalize_sender: &Sender<Vec<NotarizedBlock>>,
     ) {
         info!("Received Reply {:?}", reply.blocks);
-        let mut is_reset = false;
         for notarized in reply.blocks {
-            if self.blockchain.is_missing(notarized.block.length, notarized.block.iteration) {
-                let iteration = self.iteration.load(Ordering::Acquire);
-                if let Some(_) = self.blockchain.find_parent_block(&notarized.block.hash) {
-                    let notarized_block_iteration = notarized.block.iteration;
-                    self.blockchain.notarize(notarized.block, notarized.transactions, notarized.signatures, finalize_sender).await;
-                    if notarized_block_iteration == iteration {
-                        is_reset = true;
-                        self.iteration.swap(notarized_block_iteration + 1, Ordering::AcqRel);
-                        if !self.is_timeout.load(Ordering::Acquire) {
-                            let finalize = Self::create_finalize(iteration);
-                            let _ = dispatcher_queue_sender.send(finalize).await;
-                        }
-                        self.handle_iteration_advance(dispatcher_queue_sender, finalize_sender).await;
-                    }
+            let block = SimplexBlock {
+                hash: notarized.header.hash,
+                iteration: notarized.header.iteration,
+                length: notarized.header.length,
+                transactions: notarized.transactions,
+            };
+            if self.is_missing(notarized.header.length, notarized.header.iteration) && notarized.header.iteration == self.iteration.load(Ordering::Acquire) {
+                let header = SimplexBlockHeader::from(&block);
+                if self.proposes.get(&notarized.header.iteration) == None {
+                    self.proposes.insert(notarized.header.iteration, header.clone());
+                    self.transactions.insert(notarized.header.iteration, block.transactions);
                 }
-            }
-        }
-        if is_reset {
-            let _ = reset_timer_sender.send(()).await;
+                self.handle_notarization(header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+            } else { break }
         }
     }
 
     async fn request(&self, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
         info!("Request sent");
-        let request = Dispatch::Request(self.blockchain.last_notarized().block.length, sender);
+        let (last_notarized, _) = self.last_notarized();
+        let request = Dispatch::Request(last_notarized.length, sender);
         let _ = dispatcher_queue_sender.send(request).await;
+    }
+
+    fn add_genesis_block(&mut self) {
+        let genesis_header = SimplexBlockHeader { hash: None, iteration: Self::GENESIS_ITERATION, length: Self::GENESIS_LENGTH, transactions: Vec::new() };
+        self.proposes.insert(Self::GENESIS_ITERATION, genesis_header);
+        self.transactions.insert(Self::GENESIS_ITERATION, Vec::new());
+        let genesis_header = SimplexBlockHeader { hash: None, iteration: Self::GENESIS_ITERATION, length: Self::GENESIS_LENGTH, transactions: Vec::new() };
+        self.votes.insert(genesis_header, vec![VoteSignature { signature: Vec::new(), node: 0 }; self.probabilistic_quorum_size]);
+    }
+
+    fn last_notarized(&self) -> (&SimplexBlockHeader, &Vec<VoteSignature>) {
+        self.votes
+            .iter()
+            .filter(|(_header, signatures)| signatures.len() >= self.probabilistic_quorum_size)
+            .max_by_key(|(header, _)| header.iteration)
+            .expect("Impossible scenario")
+    }
+
+    fn get_next_block(&self, iteration: Iteration, transactions: Vec<Transaction>) -> SimplexBlock {
+        let (last_notarized, _) = self.last_notarized();
+        let hash = hash(last_notarized);
+        SimplexBlock::new(Some(hash), iteration, last_notarized.length + 1, transactions)
+    }
+
+    fn is_extendable(&self, block: &SimplexBlockHeader) -> bool {
+        let (last_notarized, _) = self.last_notarized();
+        block.hash == Some(hash(last_notarized)) && block.iteration > last_notarized.iteration && block.length == last_notarized.length + 1
+    }
+
+    fn get_notarized(&self, iteration: Iteration) -> Option<(&SimplexBlockHeader, &Vec<VoteSignature>)> {
+        self.votes
+            .iter()
+            .find(|(header, signatures)|
+                signatures.len() >= self.probabilistic_quorum_size &&
+                header.iteration == iteration
+            )
+    }
+
+    fn is_missing(&self, length: u32, iteration: Iteration) -> bool {
+        let (last_notarized, _) = self.last_notarized();
+        last_notarized.length < length || (last_notarized.length == length && iteration != last_notarized.iteration)
+    }
+
+    async fn handle_notarization(
+        &mut self,
+        iteration: Iteration,
+        dispatcher_queue_sender: &Sender<Dispatch>,
+        reset_timer_sender: &Sender<()>,
+        finalize_sender: &Sender<Vec<NotarizedBlock>>,
+    ) {
+        let is_timeout = self.is_timeout.load(Ordering::Acquire);
+        self.iteration.fetch_add(1, Ordering::AcqRel);
+        if !is_timeout {
+            let finalize = Self::create_finalize(iteration);
+            let _ = dispatcher_queue_sender.send(finalize).await;
+        }
+
+        if self.to_be_finalized.contains(&iteration) {
+            self.finalize(iteration, finalize_sender).await
+        }
+
+        let _ = reset_timer_sender.send(()).await;
+    }
+
+    async fn finalize(&mut self, iteration: Iteration, finalize_sender: &Sender<Vec<NotarizedBlock>>) {
+        let mut blocks_to_be_finalized: Vec<NotarizedBlock> = Vec::new();
+        for iter in (self.finalized_height + 1 ..= iteration).rev() {
+            let last = blocks_to_be_finalized.last();
+            match last {
+                None => {
+                    let header = self.proposes.get(&iter).unwrap().clone();
+                    let signatures = self.votes.get(&header).unwrap().clone();
+                    let transactions = self.transactions.remove(&iter).unwrap();
+                    blocks_to_be_finalized.push(NotarizedBlock { header, signatures, transactions });
+                }
+                Some(block) => {
+                    let header = self.proposes.get(&iter).unwrap();
+                    let hash = hash(&header);
+                    if block.header.hash == Some(hash) {
+                        let signatures = self.votes.get(header).unwrap().clone();
+                        let transactions = self.transactions.remove(&iter).unwrap();
+                        blocks_to_be_finalized.push(NotarizedBlock { header: header.clone(), signatures, transactions });
+                    }
+                }
+            }
+        }
+
+        self.finalized_height = iteration;
+        self.blocks_finalized += blocks_to_be_finalized.len();
+        let _ = finalize_sender.send(blocks_to_be_finalized.into_iter().rev().collect()).await;
+    }
+
+    async fn get_missing(&self, from_length: u32, sender: NodeId, dispatcher_queue_sender: &Sender<Dispatch>) {
+        /*
+        let dispatcher_queue_sender = dispatcher_queue_sender.clone();
+        let last_length = self.last_notarized().0.length;
+        let node_id = self.environment.my_node.id;
+
+        let mut missing = Vec::new();
+        for curr_length in from_length ..= last_length {
+
+
+            if blocks.is_empty() && curr_length != GENESIS_LENGTH {
+                match Self::get_finalized_block(node_id, curr_length).await {
+                    Some(notarized) => {
+                        missing.push(notarized);
+                    }
+                    None => {
+                        break
+                    }
+                }
+            } else {
+                missing.append(&mut blocks);
+            }
+        }
+
+
+        tokio::spawn(async move {
+
+
+            if missing.is_empty() { return }
+            let reply = Dispatch::Reply(missing, sender);
+            let _ = dispatcher_queue_sender.send(reply).await;
+        });
+         */
     }
 }

@@ -56,7 +56,12 @@ foreach ($line in $lines) {
         $argsList += "test"
     }
 
-    Start-Process "cargo" -ArgumentList $argsList
+    $modeArgs = @()
+    if ($useProb) { $modeArgs += "probabilistic" }
+    if ($useTest) { $modeArgs += "test" }
+
+    $allArgs = "$id $transaction_size $n_transactions $($modeArgs -join ' ')"
+    Start-Process "powershell.exe" -ArgumentList "-NoExit", "-Command", "cargo run --package simplex --bin simplex $allArgs"
 }
 
 Write-Host "All nodes started."

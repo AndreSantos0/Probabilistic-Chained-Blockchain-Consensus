@@ -24,11 +24,14 @@ pub const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks_";
 
 pub trait Protocol {
 
-    const INITIAL_ITERATION: u32 = 1;
-    const ITERATION_TIME: u64 = 5;
     const MESSAGE_CHANNEL_SIZE: usize = 1000;
     const RESET_TIMER_CHANNEL_SIZE: usize = 100;
     const SOCKET_BINDING_DELAY: u64 = 5;
+    const GENESIS_ITERATION: u32 = 0;
+    const GENESIS_LENGTH: u32 = 0;
+    const INITIAL_FINALIZED_HEIGHT: u32 = 0;
+    const INITIAL_ITERATION: u32 = 1;
+    const ITERATION_TIME: u64 = 5;
 
     type Message: SimplexMessage;
 
@@ -121,7 +124,7 @@ pub trait Protocol {
         finalize_sender: Sender<Vec<NotarizedBlock>>,
     ) {
         let start = tokio::time::Instant::now();
-        self.handle_iteration_advance(&dispatcher_queue_sender, &finalize_sender).await;
+        self.handle_iteration_advance(&dispatcher_queue_sender, &reset_timer_sender, &finalize_sender).await;
         while start.elapsed() < Duration::from_secs(60) {
             if let Some((sender, message)) = consumer_queue_receiver.recv().await {
                 self.handle_message(sender, message, &dispatcher_queue_sender, &reset_timer_sender, &finalize_sender).await;
@@ -131,7 +134,7 @@ pub trait Protocol {
         std::process::exit(0);
     }
 
-    async fn handle_iteration_advance(&mut self, dispatcher_queue_sender: &Sender<Dispatch>, finalize_sender: &Sender<Vec<NotarizedBlock>>);
+    async fn handle_iteration_advance(&mut self, dispatcher_queue_sender: &Sender<Dispatch>, reset_timer_sender: &Sender<()>, finalize_sender: &Sender<Vec<NotarizedBlock>>);
 
     fn get_leader(n_nodes: usize, iteration: u32) -> u32 {
         let mut hasher = Sha256::new();
@@ -147,7 +150,7 @@ pub trait Protocol {
     fn create_timeout(next_iteration: u32) -> Dispatch;
     fn create_vote(iteration: u32, block: SimplexBlockHeader) -> Dispatch;
     fn create_finalize(iteration: u32) -> Dispatch;
-    fn get_proposal_block(&self, iteration: u32) -> Option<&SimplexBlock>;
+    fn get_proposal(&self, iteration: u32) -> Option<&SimplexBlockHeader>;
     fn get_timeouts(&self, iteration: u32) -> usize;
     fn clear_timeouts(&mut self, iteration: u32);
 }
