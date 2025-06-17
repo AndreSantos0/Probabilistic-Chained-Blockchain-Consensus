@@ -2,7 +2,6 @@ use bincode::serialize;
 use crate::block::{SimplexBlockHeader, NotarizedBlock, SimplexBlock, VoteSignature, Iteration, NodeId};
 
 pub trait SimplexMessage: Clone + Send + Sync + serde::Serialize + for<'de> serde::Deserialize<'de> {
-    fn is_propose(&self) -> bool;
     fn is_vote(&self) -> bool;
     fn get_signature_bytes(&self) -> Option<&[u8]>;
     fn get_vote_header_bytes(&self) -> Option<Vec<u8>>;
@@ -93,10 +92,6 @@ pub enum ProbabilisticSimplexMessage {
 
 impl SimplexMessage for PracticalSimplexMessage {
 
-    fn is_propose(&self) -> bool {
-        matches!(self, Self::Propose(_))
-    }
-
     fn is_vote(&self) -> bool {
         matches!(self, Self::Vote(_))
     }
@@ -121,10 +116,6 @@ impl SimplexMessage for PracticalSimplexMessage {
 }
 
 impl SimplexMessage for ProbabilisticSimplexMessage {
-
-    fn is_propose(&self) -> bool {
-        matches!(self, Self::Propose(_))
-    }
 
     fn is_vote(&self) -> bool {
         matches!(self, Self::Vote(_))

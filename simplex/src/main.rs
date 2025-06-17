@@ -9,14 +9,14 @@ use std::env;
 use env_logger::Env;
 use log::{error, info};
 use shared::initializer::{get_environment, get_private_key, get_public_keys};
-//use crate::practical_simplex::PracticalSimplex;
+use crate::practical_simplex::PracticalSimplex;
 use crate::probabilistic_simplex::ProbabilisticSimplex;
 use crate::protocol::{Protocol, ProtocolMode};
 
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
-    let enable_logging = false;
+    let enable_logging = true;
     let args: Vec<String> = env::args().collect();
     if enable_logging {
         env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
@@ -38,9 +38,8 @@ async fn main() {
                 let public_keys = get_public_keys();
                 let private_key = get_private_key(env.my_node.id);
                 match protocol_mode {
-                    //ProtocolMode::Practical => PracticalSimplex::new(env, public_keys, private_key).start().await,
+                    ProtocolMode::Practical => PracticalSimplex::new(env, public_keys, private_key).start().await,
                     ProtocolMode::Probabilistic => ProbabilisticSimplex::new(env, public_keys, private_key).start().await,
-                    _ => {}
                 };
             // });
             // main.await.expect("");

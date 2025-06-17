@@ -401,15 +401,6 @@ impl ProbabilisticSimplex {
                 let (payload, signature) = if message.is_vote() {
                     (message.get_vote_header_bytes().expect(&format!("[Node {}] Error reading message signature from Node {}", my_node_id, node_id)),
                      message.get_signature_bytes().unwrap_or_default())
-                } else if message.is_propose() {
-                    if stream.read_exact(&mut signature).await.is_err() {
-                        error!("[Node {}] Error reading message signature from Node {}", my_node_id, node_id);
-                        return;
-                    }
-                    let mut hasher = Sha256::new();
-                    hasher.update(&buffer);
-                    let digest = hasher.finalize();
-                    (digest.to_vec(), signature.as_ref())
                 } else {
                     if stream.read_exact(&mut signature).await.is_err() {
                         error!("[Node {}] Error reading message signature from Node {}", my_node_id, node_id);
@@ -496,7 +487,7 @@ impl ProbabilisticSimplex {
     async fn handle_propose(
         &mut self,
         propose: ProbPropose,
-        sender: u32,
+        sender: NodeId,
         dispatcher_queue_sender: &Sender<Dispatch>,
         reset_timer_sender: &Sender<()>,
         finalize_sender: &Sender<Vec<NotarizedBlock>>
@@ -506,13 +497,12 @@ impl ProbabilisticSimplex {
         if !self.proposes.contains_key(&propose.content.iteration) && sender == leader {
             let iteration = self.iteration.load(Ordering::Acquire);
             let header = SimplexBlockHeader::from(&propose.content);
-            let is_extendable = self.is_extendable(&header);
 
             self.proposes.insert(propose.content.iteration, header.clone());
             self.transactions.insert(propose.content.iteration, propose.content.transactions);
 
             if propose.content.iteration == iteration {
-                if is_extendable && !self.is_timeout.load(Ordering::Acquire) {
+                if self.is_extendable(&header) && !self.is_timeout.load(Ordering::Acquire) {
                     let vote = Self::create_vote(iteration, header.clone());
                     let _ = dispatcher_queue_sender.send(vote).await;
                 };
@@ -569,7 +559,7 @@ impl ProbabilisticSimplex {
     async fn handle_vote(
         &mut self,
         vote: ProbVote,
-        sender: u32,
+        sender: NodeId,
         dispatcher_queue_sender: &Sender<Dispatch>,
         reset_timer_sender: &Sender<()>,
         finalize_sender: &Sender<Vec<NotarizedBlock>>
@@ -594,7 +584,14 @@ impl ProbabilisticSimplex {
         }
     }
 
-    async fn handle_timeout(&mut self, timeout: Timeout, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>, reset_timer_sender: &Sender<()>, finalize_sender: &Sender<Vec<NotarizedBlock>>) {
+    async fn handle_timeout(
+        &mut self,
+        timeout: Timeout,
+        sender: NodeId,
+        dispatcher_queue_sender: &Sender<Dispatch>,
+        reset_timer_sender: &Sender<()>,
+        finalize_sender: &Sender<Vec<NotarizedBlock>>
+    ) {
         info!("Received timeout {}", timeout.next_iter);
         let is_first_timeout = {
             let timeouts = self.timeouts.entry(timeout.next_iter).or_insert_with(Vec::new);
@@ -619,7 +616,7 @@ impl ProbabilisticSimplex {
         }
     }
 
-    async fn handle_finalize(&mut self, finalize: ProbFinalize, sender: u32, finalize_sender: &Sender<Vec<NotarizedBlock>>) {
+    async fn handle_finalize(&mut self, finalize: ProbFinalize, sender: NodeId, finalize_sender: &Sender<Vec<NotarizedBlock>>) {
         info!("Received finalize {}", finalize.iter);
         let finalizes = self.finalizes.entry(finalize.iter).or_insert_with(Vec::new);
         let is_first_finalize = !finalizes.iter().any(|node_id| *node_id == sender);
@@ -637,7 +634,7 @@ impl ProbabilisticSimplex {
         }
     }
 
-    async fn handle_request(&self, request: Request, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
+    async fn handle_request(&self, request: Request, sender: NodeId, dispatcher_queue_sender: &Sender<Dispatch>) {
         info!("Request received");
         self.get_missing(request.last_notarized_length, sender, dispatcher_queue_sender).await;
     }
@@ -651,25 +648,19 @@ impl ProbabilisticSimplex {
     ) {
         info!("Received Reply {:?}", reply.blocks);
         for notarized in reply.blocks {
-            let block = SimplexBlock {
-                hash: notarized.header.hash,
-                iteration: notarized.header.iteration,
-                length: notarized.header.length,
-                transactions: notarized.transactions,
-            };
             if self.is_missing(notarized.header.length, notarized.header.iteration) && notarized.header.iteration == self.iteration.load(Ordering::Acquire) {
-                let header = SimplexBlockHeader::from(&block);
+                let iteration = notarized.header.iteration;
                 if self.proposes.get(&notarized.header.iteration) == None {
-                    self.proposes.insert(notarized.header.iteration, header.clone());
-                    self.transactions.insert(notarized.header.iteration, block.transactions);
+                    self.proposes.insert(notarized.header.iteration, notarized.header);
+                    self.transactions.insert(iteration, notarized.transactions);
                 }
-                self.handle_notarization(header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                self.handle_notarization(iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                 self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
             } else { break }
         }
     }
 
-    async fn request(&self, sender: u32, dispatcher_queue_sender: &Sender<Dispatch>) {
+    async fn request(&self, sender: NodeId, dispatcher_queue_sender: &Sender<Dispatch>) {
         info!("Request sent");
         let (last_notarized, _) = self.last_notarized();
         let request = Dispatch::Request(last_notarized.length, sender);
@@ -708,7 +699,7 @@ impl ProbabilisticSimplex {
             .iter()
             .find(|(header, signatures)|
                 signatures.len() >= self.probabilistic_quorum_size &&
-                header.iteration == iteration
+                    header.iteration == iteration
             )
     }
 
@@ -767,6 +758,6 @@ impl ProbabilisticSimplex {
     }
 
     async fn get_missing(&self, _from_length: u32, _sender: NodeId, _dispatcher_queue_sender: &Sender<Dispatch>) {
-       //TODO
-    }
+        //TODO
+   }
 }
