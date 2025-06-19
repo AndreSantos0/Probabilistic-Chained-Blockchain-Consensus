@@ -59,7 +59,7 @@ while read -r node; do
     cd $REMOTE_DIR || { echo '❌ Repo dir not found'; exit 1; }
     rm -f FinalizedBlocks_$node_id.ndjson
     source \$HOME/.cargo/env
-    timeout 65s cargo run --package simplex --bin simplex $node_id ${ARGS[*]} > /tmp/simplex_$node_id.log 2>&1
+    cargo run --release --package simplex --bin simplex $node_id ${ARGS[*]} > /tmp/simplex_$node_id.log 2>&1
   " &
 
   pids+=($!)
@@ -75,23 +75,3 @@ done
 set -e
 
 echo "✅ All remote executions complete."
-
-read -r node < "$NODES_FILE"
-if [[ -n "$node" ]]; then
-  FILE_NAME="FinalizedBlocks_0.ndjson"
-  echo "📥 Retrieving result file $FILE_NAME from node $node..."
-  scp "$SSH_USER@$node:$REMOTE_DIR/$FILE_NAME" "$LOCAL_RESULTS_DIR/$FILE_NAME" || echo "⚠️ Failed to retrieve $FILE_NAME from $node"
-else
-  echo "❌ No node found in $NODES_FILE"
-fi
-
-echo "✅ All results collected in '$LOCAL_RESULTS_DIR/'"
-
-last_line=$(tail -n 1 "$NDJSON_FILE")
-length=$(echo "$last_line" | grep -o '"length":[0-9]*' | sed 's/[^0-9]*//')
-
-if [ -n "$length" ]; then
-  echo "Length field value: $length"
-else
-  echo "Could not find length field."
-fi

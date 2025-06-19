@@ -47,7 +47,7 @@ foreach ($line in $lines) {
 
     Write-Host "Starting node ${id} on ${hostname}:${port}..."
 
-    $argsList = @("run", "--package", "simplex", "--bin", "simplex", $id, $transaction_size, $n_transactions)
+    $argsList = @("run", "--release", "--package", "simplex", "--bin", "simplex", $id, $transaction_size, $n_transactions)
 
     if ($useProb) {
         $argsList += "probabilistic"
@@ -61,7 +61,7 @@ foreach ($line in $lines) {
     if ($useTest) { $modeArgs += "test" }
 
     $allArgs = "$id $transaction_size $n_transactions $($modeArgs -join ' ')"
-    Start-Process "powershell.exe" -ArgumentList "-NoExit", "-Command", "cargo run --package simplex --bin simplex $allArgs"
+    Start-Process "powershell.exe" -ArgumentList "-NoExit", "-Command", "cargo run --release --package simplex --bin simplex $allArgs"
 }
 
 Write-Host "All nodes started."
