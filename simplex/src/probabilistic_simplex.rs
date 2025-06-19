@@ -699,7 +699,8 @@ impl ProbabilisticSimplex {
             .iter()
             .find(|(header, signatures)|
                 signatures.len() >= self.probabilistic_quorum_size &&
-                    header.iteration == iteration
+                header.iteration == iteration &&
+                self.proposes.get(&iteration).is_some()
             )
     }
 
