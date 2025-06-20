@@ -695,9 +695,6 @@ impl ProbabilisticSimplex {
     }
 
     fn get_notarized(&self, iteration: Iteration) -> Option<(&SimplexBlockHeader, &Vec<VoteSignature>)> {
-        if iteration > self.iteration.load(Ordering::Acquire) {
-            return None
-        }
         self.votes
             .iter()
             .find(|(header, signatures)|
