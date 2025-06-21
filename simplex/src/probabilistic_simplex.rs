@@ -516,7 +516,7 @@ impl ProbabilisticSimplex {
             }
 
             if propose.content.iteration > iteration {
-                if self.proposes.contains_key(&propose.last_notarized_iter) && propose.last_notarized_cert.len() >= self.probabilistic_quorum_size {
+                if propose.last_notarized_cert.len() >= self.probabilistic_quorum_size {
                     let last_notarized_header = self.proposes.get(&propose.last_notarized_iter).unwrap();
                     if !self.environment.test_flag {
                         let serialized_message = match serialize(last_notarized_header) {
@@ -545,11 +545,13 @@ impl ProbabilisticSimplex {
                     }
 
                     self.votes.insert(last_notarized_header.clone(), propose.last_notarized_cert);
-                    if iteration == propose.last_notarized_iter {
-                        self.handle_notarization(last_notarized_header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
-                        self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
-                    } else {
-                        self.request(sender, dispatcher_queue_sender).await;
+                    if self.proposes.contains_key(&propose.last_notarized_iter) {
+                        if iteration == propose.last_notarized_iter {
+                            self.handle_notarization(last_notarized_header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                            self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                        } else {
+                            self.request(sender, dispatcher_queue_sender).await;
+                        }
                     }
                 }
             }
@@ -623,7 +625,7 @@ impl ProbabilisticSimplex {
         if is_first_finalize {
             finalizes.push(sender);
             if finalizes.len() == self.probabilistic_quorum_size && self.finalized_height < finalize.iter {
-                if let Some(_) = self.get_notarized(finalize.iter) {
+                if finalize.iter < self.iteration.load(Ordering::Acquire) {
                     self.finalize(finalize.iter, finalize_sender).await;
                     self.proposes.retain(|iteration, _| *iteration + FINALIZATION_GAP > finalize.iter);
                     self.finalizes.retain(|iteration, _| *iteration > finalize.iter);
@@ -745,12 +747,17 @@ impl ProbabilisticSimplex {
                     blocks_to_be_finalized.push(NotarizedBlock { header, signatures, transactions });
                 }
                 Some(block) => {
-                    let header = self.proposes.get(&iter).unwrap();
-                    let hash = hash(&header);
-                    if block.header.hash == Some(hash) {
-                        let signatures = self.votes.get(header).unwrap().clone();
-                        let transactions = self.transactions.remove(&iter).unwrap();
-                        blocks_to_be_finalized.push(NotarizedBlock { header: header.clone(), signatures, transactions });
+                    let header = self.proposes.get(&iter);
+                    match header {
+                        None => continue,
+                        Some(header) => {
+                            let hash = hash(&header);
+                            if block.header.hash == Some(hash) {
+                                let signatures = self.votes.get(header).unwrap().clone();
+                                let transactions = self.transactions.remove(&iter).unwrap();
+                                blocks_to_be_finalized.push(NotarizedBlock { header: header.clone(), signatures, transactions });
+                            }
+                        }
                     }
                 }
             }

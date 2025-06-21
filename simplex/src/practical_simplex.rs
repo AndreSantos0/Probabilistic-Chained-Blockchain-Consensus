@@ -502,7 +502,7 @@ impl PracticalSimplex {
         if is_first_finalize {
             finalizes.push(sender);
             if finalizes.len() == self.quorum_size && self.finalized_height < finalize.iter {
-                if let Some(_) = self.get_notarized(finalize.iter) {
+                if finalize.iter < self.iteration.load(Ordering::Acquire) {
                     self.finalize(finalize.iter, finalize_sender).await;
                     self.proposes.retain(|iteration, _| *iteration > finalize.iter);
                     self.finalizes.retain(|iteration, _| *iteration > finalize.iter);
@@ -664,12 +664,17 @@ impl PracticalSimplex {
                     blocks_to_be_finalized.push(NotarizedBlock { header, signatures, transactions });
                 }
                 Some(block) => {
-                    let header = self.proposes.get(&iter).unwrap();
-                    let hash = hash(&header);
-                    if block.header.hash == Some(hash) {
-                        let signatures = self.votes.get(header).unwrap().clone();
-                        let transactions = self.transactions.remove(&iter).unwrap();
-                        blocks_to_be_finalized.push(NotarizedBlock { header: header.clone(), signatures, transactions });
+                    let header = self.proposes.get(&iter);
+                    match header {
+                        None => continue,
+                        Some(header) => {
+                            let hash = hash(&header);
+                            if block.header.hash == Some(hash) {
+                                let signatures = self.votes.get(header).unwrap().clone();
+                                let transactions = self.transactions.remove(&iter).unwrap();
+                                blocks_to_be_finalized.push(NotarizedBlock { header: header.clone(), signatures, transactions });
+                            }
+                        }
                     }
                 }
             }
