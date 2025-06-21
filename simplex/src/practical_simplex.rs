@@ -609,19 +609,6 @@ impl PracticalSimplex {
         block.hash == Some(hash(last_notarized)) && block.iteration > last_notarized.iteration && block.length == last_notarized.length + 1
     }
 
-    fn get_notarized(&self, iteration: Iteration) -> Option<(&SimplexBlockHeader, &Vec<VoteSignature>)> {
-        if iteration >= self.iteration.load(Ordering::Acquire) {
-            return None
-        }
-        self.votes
-            .iter()
-            .find(|(header, signatures)|
-                signatures.len() >= self.quorum_size &&
-                header.iteration == iteration &&
-                self.proposes.get(&iteration).is_some()
-            )
-    }
-
     fn is_missing(&self, length: u32, iteration: Iteration) -> bool {
         let (last_notarized, _) = self.last_notarized();
         last_notarized.length < length || (last_notarized.length == length && iteration != last_notarized.iteration)

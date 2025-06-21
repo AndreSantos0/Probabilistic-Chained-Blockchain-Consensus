@@ -516,7 +516,7 @@ impl ProbabilisticSimplex {
             }
 
             if propose.content.iteration > iteration {
-                if propose.last_notarized_cert.len() >= self.probabilistic_quorum_size {
+                if self.proposes.contains_key(&propose.last_notarized_iter) && propose.last_notarized_cert.len() >= self.probabilistic_quorum_size {
                     let last_notarized_header = self.proposes.get(&propose.last_notarized_iter).unwrap();
                     if !self.environment.test_flag {
                         let serialized_message = match serialize(last_notarized_header) {
@@ -545,13 +545,11 @@ impl ProbabilisticSimplex {
                     }
 
                     self.votes.insert(last_notarized_header.clone(), propose.last_notarized_cert);
-                    if self.proposes.contains_key(&propose.last_notarized_iter) {
-                        if iteration == propose.last_notarized_iter {
-                            self.handle_notarization(last_notarized_header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
-                            self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
-                        } else {
-                            self.request(sender, dispatcher_queue_sender).await;
-                        }
+                    if iteration == propose.last_notarized_iter {
+                        self.handle_notarization(last_notarized_header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                        self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                    } else {
+                        self.request(sender, dispatcher_queue_sender).await;
                     }
                 }
             }
