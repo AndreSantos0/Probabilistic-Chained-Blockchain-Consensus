@@ -642,7 +642,7 @@ impl PracticalSimplex {
             let _ = dispatcher_queue_sender.send(finalize).await;
         }
 
-        if self.to_be_finalized.contains(&last_notarized_header.iteration) {
+        if self.to_be_finalized.contains(&last_notarized_header.iteration) && self.finalized_height < last_notarized_header.iteration {
             self.finalize(last_notarized_header.iteration, finalize_sender).await
         }
 

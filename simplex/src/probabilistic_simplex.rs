@@ -726,7 +726,7 @@ impl ProbabilisticSimplex {
             let _ = dispatcher_queue_sender.send(finalize).await;
         }
 
-        if self.to_be_finalized.contains(&iteration) {
+        if self.to_be_finalized.contains(&iteration) && self.finalized_height < iteration {
             self.finalize(iteration, finalize_sender).await
         }
 
