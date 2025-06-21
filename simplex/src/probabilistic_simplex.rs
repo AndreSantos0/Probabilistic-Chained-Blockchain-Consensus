@@ -192,7 +192,7 @@ impl Protocol for ProbabilisticSimplex {
                 let _ = dispatcher_queue_sender.send(propose).await;
             }
 
-            if let Some(propose_header) = self.get_proposal(iteration) {
+            if let Some(propose_header) = self.proposes.get(&iteration) {
                 if !self.is_timeout.load(Ordering::Acquire) && self.is_extendable(propose_header) {
                     let vote = Self::create_vote(iteration, propose_header.clone());
                     let _ = dispatcher_queue_sender.send(vote).await;
