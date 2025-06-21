@@ -204,6 +204,38 @@ impl Protocol for ProbabilisticSimplex {
                         continue
                     }
                 }
+                if self.propose_certificates.contains_key(&iteration) {
+                    if !self.environment.test_flag {
+                        let certificate_votes = self.propose_certificates.get(&iteration).unwrap();
+                        let serialized_message = match serialize(&propose_header) {
+                            Ok(msg) => msg,
+                            Err(e) => {
+                                error!("Failed to serialize message: {}", e);
+                                return;
+                            }
+                        };
+
+                        let messages: Vec<&[u8]> = (0..certificate_votes.len()).map(|_| serialized_message.as_slice()).collect();
+                        let signatures: Vec<Signature> = certificate_votes.iter().map(
+                            |vote_signature| Signature::from_bytes(vote_signature.signature.as_ref()).unwrap()
+                        ).collect();
+                        let mut keys = Vec::with_capacity(certificate_votes.len());
+                        for vote_signature in certificate_votes {
+                            match self.public_keys.get(&vote_signature.node) {
+                                Some(key) => keys.push(*key),
+                                None => return,
+                            }
+                        }
+
+                        if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
+                            return;
+                        }
+                    }
+
+                    self.votes.insert(propose_header.clone(), self.propose_certificates.remove(&iteration).unwrap());
+                    self.handle_notarization(propose_header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                    continue
+                }
             }
 
             if self.get_timeouts(iteration + 1) >= self.quorum_size {
@@ -515,39 +547,6 @@ impl ProbabilisticSimplex {
                         self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                         return;
                     }
-                }
-                if self.propose_certificates.contains_key(&propose.content.iteration) {
-                    if !self.environment.test_flag {
-                        let certificate_votes = self.propose_certificates.get(&propose.content.iteration).unwrap();
-                        let serialized_message = match serialize(&header) {
-                            Ok(msg) => msg,
-                            Err(e) => {
-                                error!("Failed to serialize message: {}", e);
-                                return;
-                            }
-                        };
-
-                        let messages: Vec<&[u8]> = (0..certificate_votes.len()).map(|_| serialized_message.as_slice()).collect();
-                        let signatures: Vec<Signature> = certificate_votes.iter().map(
-                            |vote_signature| Signature::from_bytes(vote_signature.signature.as_ref()).unwrap()
-                        ).collect();
-                        let mut keys = Vec::with_capacity(propose.last_notarized_cert.len());
-                        for vote_signature in certificate_votes {
-                            match self.public_keys.get(&vote_signature.node) {
-                                Some(key) => keys.push(*key),
-                                None => return,
-                            }
-                        }
-
-                        if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
-                            return;
-                        }
-                    }
-
-                    let notarized_iteration = header.iteration;
-                    self.votes.insert(header, self.propose_certificates.remove(&propose.content.iteration).unwrap());
-                    self.handle_notarization(notarized_iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
-                    self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                 }
             }
 
