@@ -579,6 +579,7 @@ impl ProbabilisticSimplex {
                     let notarized_iteration = header.iteration;
                     self.votes.insert(header, self.propose_certificates.remove(&iteration).unwrap());
                     self.handle_notarization(notarized_iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                    self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                 }
             }
 
