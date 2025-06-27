@@ -1,13 +1,14 @@
 use crate::block::{hash, Iteration, NodeId, NotarizedBlock, SimplexBlock, SimplexBlockHeader, VoteSignature};
 use crate::connection::{broadcast, generate_nonce, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
 use crate::message::{Dispatch, Finalize, PracticalSimplexMessage, Propose, Reply, Request, SimplexMessage, Timeout, View, Vote};
-use crate::protocol::Protocol;
+use crate::protocol::{Latency, Protocol};
 use sha2::{Digest, Sha256};
 use shared::domain::environment::Environment;
 use shared::transaction_generator::TransactionGenerator;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::{SystemTime};
 use bincode::{deserialize, serialize};
 use ed25519_dalek::{verify_batch, Keypair, PublicKey, Signature, Signer, Verifier};
 use log::{error, info, warn};
@@ -31,6 +32,7 @@ pub struct PracticalSimplex {
     finalizes: HashMap<Iteration, Vec<NodeId>>,
     finalized_height: Iteration,
     to_be_finalized: Vec<Iteration>,
+    timestamps: HashMap<Iteration, Latency>,
     transaction_generator: TransactionGenerator,
     public_keys: HashMap<NodeId, PublicKey>,
     private_key: Keypair,
@@ -57,6 +59,7 @@ impl Protocol for PracticalSimplex {
             finalizes: HashMap::new(),
             finalized_height: Self::INITIAL_FINALIZED_HEIGHT,
             to_be_finalized: Vec::new(),
+            timestamps: HashMap::new(),
             transaction_generator: TransactionGenerator::new(transaction_size, n_transactions),
             public_keys,
             private_key
@@ -79,6 +82,10 @@ impl Protocol for PracticalSimplex {
 
     fn get_finalized_blocks(&self) -> usize {
         self.blocks_finalized
+    }
+
+    fn get_timestamps(&self) -> &HashMap<Iteration, Latency> {
+        &self.timestamps
     }
 
     async fn connect(&self, message_queue_sender: Sender<(NodeId, PracticalSimplexMessage)>, listener: TcpListener) -> Vec<Option<TcpStream>> {
@@ -241,6 +248,8 @@ impl Protocol for PracticalSimplex {
     fn clear_timeouts(&mut self, iteration: u32) {
         self.timeouts.retain(|iter, _| *iter > iteration);
     }
+
+
 }
 
 impl PracticalSimplex {
@@ -414,6 +423,7 @@ impl PracticalSimplex {
 
             self.proposes.insert(propose.content.iteration, header.clone());
             self.transactions.insert(propose.content.iteration, propose.content.transactions);
+            self.timestamps.insert(propose.content.iteration, Latency { proposal: SystemTime::now(), block_time: None, finalization_time: None });
 
             if iteration == propose.content.iteration {
                 if self.is_extendable(&header) && !self.is_timeout.load(Ordering::Acquire) {
@@ -455,6 +465,7 @@ impl PracticalSimplex {
                         None => return,
                         Some(header) => {
                             if vote.iteration == self.iteration.load(Ordering::Acquire) {
+                                self.timestamps.get_mut(&vote.iteration).unwrap().block_time = Some(SystemTime::now());
                                 self.handle_notarization(header.clone(), votes.to_vec(), dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                                 self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                             }
@@ -503,6 +514,7 @@ impl PracticalSimplex {
             finalizes.push(sender);
             if finalizes.len() == self.quorum_size && self.finalized_height < finalize.iter {
                 if finalize.iter < self.iteration.load(Ordering::Acquire) {
+                    self.timestamps.get_mut(&finalize.iter).unwrap().finalization_time = Some(SystemTime::now());
                     self.finalize(finalize.iter, finalize_sender).await;
                     self.proposes.retain(|iteration, _| *iteration > finalize.iter);
                     self.finalizes.retain(|iteration, _| *iteration > finalize.iter);

@@ -1,9 +1,10 @@
-use crate::block::{SimplexBlockHeader, NodeId, SimplexBlock, NotarizedBlock};
+use crate::block::{SimplexBlockHeader, NodeId, SimplexBlock, NotarizedBlock, Iteration};
 use crate::message::{Dispatch, SimplexMessage};
 use shared::domain::environment::Environment;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::SystemTime;
 use ed25519_dalek::{Keypair, PublicKey};
 use log::{error};
 use serde_json::to_string;
@@ -20,6 +21,12 @@ pub enum ProtocolMode {
     Probabilistic
 }
 
+pub struct Latency {
+    pub proposal: SystemTime,
+    pub block_time: Option<SystemTime>,
+    pub finalization_time: Option<SystemTime>,
+}
+
 pub const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks_";
 
 pub trait Protocol {
@@ -33,14 +40,59 @@ pub trait Protocol {
     const INITIAL_FINALIZED_HEIGHT: u32 = 0;
     const INITIAL_ITERATION: u32 = 1;
     const ITERATION_TIME: u64 = 5;
+    const PROPOSALS_BEFORE_COUNTDOWN: usize = 50;
 
     type Message: SimplexMessage;
+
 
     fn new(environment: Environment, public_keys: HashMap<u32, PublicKey>, private_key: Keypair) -> Self;
     fn get_environment(&self) -> &Environment;
     fn get_iteration(&self) -> &Arc<AtomicU32>;
     fn get_is_timeout(&self) -> &Arc<AtomicBool>;
     fn get_finalized_blocks(&self) -> usize;
+    fn get_timestamps(&self) -> &HashMap<Iteration, Latency>;
+
+    fn get_block_time(&self) -> usize {
+        let mut total = Duration::from_millis(0);
+        let mut count = 0;
+
+        for latency in self.get_timestamps().values() {
+            if let Some(block_time) = latency.block_time {
+                if let Ok(diff) = block_time.duration_since(latency.proposal) {
+                    total += diff;
+                    count += 1;
+                }
+            }
+        }
+
+        if count > 0 {
+            (total.as_millis() / count) as usize
+        } else {
+            0
+        }
+    }
+
+    fn get_finalization_time(&self) -> usize {
+        let mut total = Duration::from_millis(0);
+        let mut count = 0;
+
+        for latency in self.get_timestamps().values() {
+            if let Some(finalization_time) = latency.finalization_time {
+                if let Ok(diff) = finalization_time.duration_since(latency.proposal) {
+                    if latency.block_time.is_some() {
+                        total += diff;
+                        count += 1;
+                    }
+                }
+            }
+        }
+
+        if count > 0 {
+            (total.as_millis() / count) as usize
+        } else {
+            0
+        }
+    }
 
     async fn start(&mut self) {
         let address = format!("{}:{}", self.get_environment().my_node.host, self.get_environment().my_node.port);
@@ -124,14 +176,34 @@ pub trait Protocol {
         reset_timer_sender: Sender<()>,
         finalize_sender: Sender<Vec<NotarizedBlock>>,
     ) {
-        let start = tokio::time::Instant::now();
+        let mut n_proposals = 0;
         self.handle_iteration_advance(&dispatcher_queue_sender, &reset_timer_sender, &finalize_sender).await;
+
+        while n_proposals < Self::PROPOSALS_BEFORE_COUNTDOWN {
+            if let Some((sender, message)) = consumer_queue_receiver.recv().await {
+                if message.is_propose() {
+                    n_proposals += 1;
+                }
+                self.handle_message(sender, message, &dispatcher_queue_sender, &reset_timer_sender, &finalize_sender).await;
+            }
+        }
+
+        let start = tokio::time::Instant::now();
         while start.elapsed() < Duration::from_secs(Self::EXECUTION_TIME_SECS) {
             if let Some((sender, message)) = consumer_queue_receiver.recv().await {
                 self.handle_message(sender, message, &dispatcher_queue_sender, &reset_timer_sender, &finalize_sender).await;
             }
         }
-        println!("{} blocks finalized", self.get_finalized_blocks());
+
+        let finalized_blocks = if self.get_finalized_blocks() > Self::PROPOSALS_BEFORE_COUNTDOWN {
+            self.get_finalized_blocks() - Self::PROPOSALS_BEFORE_COUNTDOWN
+        } else {
+            self.get_finalized_blocks()
+        };
+
+        println!("Blocks finalized: {} ", finalized_blocks);
+        println!("Average block time (ms): {}", self.get_block_time());
+        println!("Average finalization time (ms): {}", self.get_finalization_time());
         std::process::exit(0);
     }
 
