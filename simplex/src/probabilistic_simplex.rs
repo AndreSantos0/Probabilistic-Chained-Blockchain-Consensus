@@ -831,7 +831,7 @@ impl ProbabilisticSimplex {
                         Some(header) => {
                             let hash = hash(&header);
                             if block.header.hash == Some(hash) {
-                                let signatures = self.votes.get(header).unwrap().clone();
+                                let signatures = self.votes.remove(header).unwrap();
                                 let transactions = self.transactions.remove(&iter).unwrap();
                                 blocks_to_be_finalized.push(NotarizedBlock { header: header.clone(), signatures, transactions });
                             }
