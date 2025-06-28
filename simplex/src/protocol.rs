@@ -22,9 +22,8 @@ pub enum ProtocolMode {
 }
 
 pub struct Latency {
-    pub proposal: SystemTime,
-    pub block_time: Option<SystemTime>,
-    pub finalization_time: Option<SystemTime>,
+    pub start: SystemTime,
+    pub finalization: Option<SystemTime>,
 }
 
 pub const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks_";
@@ -50,47 +49,25 @@ pub trait Protocol {
     fn get_iteration(&self) -> &Arc<AtomicU32>;
     fn get_is_timeout(&self) -> &Arc<AtomicBool>;
     fn get_finalized_blocks(&self) -> usize;
-    fn get_timestamps(&self) -> &HashMap<Iteration, Latency>;
+    fn get_finalization_timestamps(&self) -> &HashMap<Iteration, Latency>;
 
-    fn get_block_time(&self) -> usize {
+    fn get_finalization_time(&self) -> f64 {
         let mut total = Duration::from_millis(0);
-        let mut count = 0;
+        let mut count = 0.0;
 
-        for latency in self.get_timestamps().values() {
-            if let Some(block_time) = latency.block_time {
-                if let Ok(diff) = block_time.duration_since(latency.proposal) {
+        for latency in self.get_finalization_timestamps().values() {
+            if let Some(finalization_time) = latency.finalization {
+                if let Ok(diff) = finalization_time.duration_since(latency.start) {
                     total += diff;
-                    count += 1;
+                    count += 1.0;
                 }
             }
         }
 
-        if count > 0 {
-            (total.as_millis() / count) as usize
+        if count > 0.0 {
+            total.as_secs_f64() / count
         } else {
-            0
-        }
-    }
-
-    fn get_finalization_time(&self) -> usize {
-        let mut total = Duration::from_millis(0);
-        let mut count = 0;
-
-        for latency in self.get_timestamps().values() {
-            if let Some(finalization_time) = latency.finalization_time {
-                if let Ok(diff) = finalization_time.duration_since(latency.proposal) {
-                    if latency.block_time.is_some() {
-                        total += diff;
-                        count += 1;
-                    }
-                }
-            }
-        }
-
-        if count > 0 {
-            (total.as_millis() / count) as usize
-        } else {
-            0
+            0.0
         }
     }
 
@@ -202,7 +179,6 @@ pub trait Protocol {
         };
 
         println!("Blocks finalized: {} ", finalized_blocks);
-        println!("Average block time (ms): {}", self.get_block_time());
         println!("Average finalization time (ms): {}", self.get_finalization_time());
         std::process::exit(0);
     }

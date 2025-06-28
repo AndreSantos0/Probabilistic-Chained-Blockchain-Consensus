@@ -32,7 +32,7 @@ pub struct PracticalSimplex {
     finalizes: HashMap<Iteration, Vec<NodeId>>,
     finalized_height: Iteration,
     to_be_finalized: Vec<Iteration>,
-    timestamps: HashMap<Iteration, Latency>,
+    finalization_timestamps: HashMap<Iteration, Latency>,
     transaction_generator: TransactionGenerator,
     public_keys: HashMap<NodeId, PublicKey>,
     private_key: Keypair,
@@ -59,10 +59,10 @@ impl Protocol for PracticalSimplex {
             finalizes: HashMap::new(),
             finalized_height: Self::INITIAL_FINALIZED_HEIGHT,
             to_be_finalized: Vec::new(),
-            timestamps: HashMap::new(),
+            finalization_timestamps: HashMap::new(),
             transaction_generator: TransactionGenerator::new(transaction_size, n_transactions),
             public_keys,
-            private_key
+            private_key,
         };
         protocol.add_genesis_block();
         protocol
@@ -84,8 +84,8 @@ impl Protocol for PracticalSimplex {
         self.blocks_finalized
     }
 
-    fn get_timestamps(&self) -> &HashMap<Iteration, Latency> {
-        &self.timestamps
+    fn get_finalization_timestamps(&self) -> &HashMap<Iteration, Latency> {
+        &self.finalization_timestamps
     }
 
     async fn connect(&self, message_queue_sender: Sender<(NodeId, PracticalSimplexMessage)>, listener: TcpListener) -> Vec<Option<TcpStream>> {
@@ -166,6 +166,7 @@ impl Protocol for PracticalSimplex {
     ) {
         loop {
             let iteration = self.iteration.load(Ordering::Acquire);
+            self.finalization_timestamps.insert(iteration, Latency { start: SystemTime::now(), finalization: None });
             let leader = Self::get_leader(self.environment.nodes.len(), iteration);
             self.is_timeout.store(false, Ordering::Release);
             self.clear_timeouts(iteration);
@@ -420,10 +421,8 @@ impl PracticalSimplex {
         if !self.proposes.contains_key(&propose.content.iteration) && sender == leader {
             let iteration = self.iteration.load(Ordering::Acquire);
             let header = SimplexBlockHeader::from(&propose.content);
-
             self.proposes.insert(propose.content.iteration, header.clone());
             self.transactions.insert(propose.content.iteration, propose.content.transactions);
-            self.timestamps.insert(propose.content.iteration, Latency { proposal: SystemTime::now(), block_time: None, finalization_time: None });
 
             if iteration == propose.content.iteration {
                 if self.is_extendable(&header) && !self.is_timeout.load(Ordering::Acquire) {
@@ -465,7 +464,6 @@ impl PracticalSimplex {
                         None => return,
                         Some(header) => {
                             if vote.iteration == self.iteration.load(Ordering::Acquire) {
-                                self.timestamps.get_mut(&vote.iteration).unwrap().block_time = Some(SystemTime::now());
                                 self.handle_notarization(header.clone(), votes.to_vec(), dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                                 self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                             }
@@ -514,7 +512,7 @@ impl PracticalSimplex {
             finalizes.push(sender);
             if finalizes.len() == self.quorum_size && self.finalized_height < finalize.iter {
                 if finalize.iter < self.iteration.load(Ordering::Acquire) {
-                    self.timestamps.get_mut(&finalize.iter).unwrap().finalization_time = Some(SystemTime::now());
+                    self.finalization_timestamps.get_mut(&finalize.iter).unwrap().finalization = Some(SystemTime::now());
                     self.finalize(finalize.iter, finalize_sender).await;
                     self.proposes.retain(|iteration, _| *iteration > finalize.iter);
                     self.finalizes.retain(|iteration, _| *iteration > finalize.iter);
