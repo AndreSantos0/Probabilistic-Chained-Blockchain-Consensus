@@ -278,7 +278,7 @@ impl Streamlet {
                     println!("Leader is node {} | Epoch: {}", leader, epoch);
                     if leader == self.environment.my_node.id {
                         let epoch = self.epoch.load(Ordering::SeqCst);
-                        let transactions = self.transaction_generator.generate();
+                        //let transactions = self.transaction_generator.poll();
                         //let block = self.blockchain.get_next_block(epoch, transactions);
                         //let message = StreamletMessage::Propose(Propose { content: block });
                         //let _ = dispatcher_queue_sender.send(message).await;
