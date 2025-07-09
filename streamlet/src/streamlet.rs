@@ -28,7 +28,6 @@ pub struct Latency {
 }
 
 const INITIAL_EPOCH: u32 = 0;
-const EPOCH_TIME: f64 = 0.04;
 const MESSAGE_CHANNEL_SIZE: usize = 100;
 const NONCE_BYTES_LENGTH: usize = 32;
 const MESSAGE_BYTES_LENGTH: usize = 4;
@@ -42,6 +41,7 @@ pub struct Streamlet {
     environment: Environment,
     epoch: Arc<AtomicU32>,
     quorum_size: usize,
+    epoch_time_secs: f64,
     transaction_generator: TransactionGenerator,
     blocks: HashMap<u32, bool>,
     votes_ids: HashMap<StreamletBlock, Vec<NodeId>>,
@@ -54,7 +54,7 @@ pub struct Streamlet {
 
 impl Streamlet {
 
-    pub fn new(environment: Environment, public_keys: HashMap<NodeId, PublicKey>, private_key: Keypair) -> Self {
+    pub fn new(environment: Environment, epoch_time_secs: f64, public_keys: HashMap<NodeId, PublicKey>, private_key: Keypair) -> Self {
         let n = environment.nodes.len();
         let transaction_size = environment.transaction_size;
         let n_transactions = environment.n_transactions;
@@ -62,6 +62,7 @@ impl Streamlet {
             environment,
             epoch: Arc::new(AtomicU32::new(INITIAL_EPOCH)),
             quorum_size: n * 2 / 3 + 1,
+            epoch_time_secs,
             transaction_generator: TransactionGenerator::new(transaction_size, n_transactions),
             blocks: HashMap::new(),
             votes_ids: HashMap::new(),
@@ -260,13 +261,14 @@ impl Streamlet {
 
     async fn start_epoch_counter(&self, epoch_sender: Sender<()>) {
         let epoch_counter = self.epoch.clone();
-        let mut interval = time::interval(Duration::from_secs_f64(EPOCH_TIME));
+        let epoch_time = self.epoch_time_secs;
+        let mut interval = time::interval(Duration::from_secs_f64(epoch_time));
         tokio::spawn(async move {
             loop {
                 interval.tick().await;
                 epoch_counter.fetch_add(1, Ordering::SeqCst);
                 let _ = epoch_sender.send(()).await;
-                interval = time::interval(Duration::from_secs_f64(EPOCH_TIME));
+                interval = time::interval(Duration::from_secs_f64(epoch_time));
                 interval.tick().await;
             }
         });

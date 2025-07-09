@@ -1,6 +1,7 @@
 param (
     [int]$transaction_size,
     [int]$n_transactions,
+    [double]$epoch_time,
     [string[]]$modes
 )
 
@@ -13,9 +14,9 @@ if (-not (Test-Path $csvPath)) {
 }
 
 # Validate numeric args
-if (-not $transaction_size -or -not $n_transactions) {
-    Write-Host "Error: Both -transaction_size and -n_transactions parameters are required."
-    Write-Host "Usage: .\start_nodes.ps1 -transaction_size <int> -n_transactions <int> -modes <'test'>"
+if (-not $transaction_size -or -not $n_transactions -or -not $epoch_time) {
+    Write-Host "Error: Parameters -transaction_size, -n_transactions, and -epoch_time are required."
+    Write-Host "Usage: .\start_nodes.ps1 -transaction_size <int> -n_transactions <int> -epoch_time <float64> -modes <'test'>"
     exit 1
 }
 
@@ -44,7 +45,7 @@ foreach ($line in $lines) {
     $modeArgs = @()
     if ($useTest) { $modeArgs += "test" }
 
-    $allArgs = "$id $transaction_size $n_transactions $($modeArgs -join ' ')"
+    $allArgs = "$id $transaction_size $n_transactions $epoch_time $($modeArgs -join ' ')"
 
     Start-Process "powershell.exe" -ArgumentList "-NoExit", "-Command", "cargo run --release --package streamlet --bin streamlet $allArgs"
 }

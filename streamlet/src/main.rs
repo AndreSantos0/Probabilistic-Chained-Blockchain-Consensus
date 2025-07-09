@@ -19,12 +19,14 @@ async fn main() {
     } else {
         log::set_max_level(log::LevelFilter::Off);
     }
+    let epoch_time = args[4].parse::<f64>().unwrap();
     match get_environment(args) {
         Ok(env) => {
             info!("Successfully read environment: {:?}", env);
+
             let public_keys = get_public_keys();
             let private_key = get_private_key(env.my_node.id);
-            Streamlet::new(env, public_keys, private_key).start().await
+            Streamlet::new(env, epoch_time, public_keys, private_key).start().await
         },
         Err(err) => {
             error!("Error: {}", err);
