@@ -33,7 +33,7 @@ pub async fn broadcast(
     };
 
     let length_bytes = (payload.len() as u32).to_be_bytes();
-    let signature = if !enable_crypto {
+    let signature = if !enable_crypto || message.is_echo() {
         None
     } else {
         Some(private_key.sign(&payload))

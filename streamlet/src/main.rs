@@ -2,6 +2,7 @@ mod message;
 mod block;
 mod streamlet;
 mod connection;
+mod blockchain;
 
 use std::env;
 use env_logger::Env;
