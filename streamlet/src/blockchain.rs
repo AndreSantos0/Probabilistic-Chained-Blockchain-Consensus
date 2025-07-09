@@ -115,4 +115,28 @@ impl Blockchain {
         chain.reverse();
         chain
     }
+
+    fn print_blockchain(&self, node: &StreamletBlock, n_tabs: usize) {
+        if n_tabs == 1 {
+            println!("[Epoch: {} | Length: {}]", node.epoch, node.length);
+        }
+
+        let childs: Vec<&StreamletBlock> = self.nodes.iter().filter(|(_, child)| {
+            match self.find_parent_block(child) {
+                None => false,
+                Some(previous) => { previous.epoch == node.epoch }
+            }
+        }).map(|(_, block)| block).collect();
+
+        let tabs = "\t".repeat(n_tabs);
+        for child in childs {
+            println!("{}[Epoch: {} | Length: {}]", tabs, child.epoch, child.length);
+            self.print_blockchain(&child, n_tabs + 1);
+        }
+    }
+
+    pub fn print(&self) {
+        let genesis = self.nodes.iter().min_by_key(|(_, block)| block.length).unwrap().1;
+        self.print_blockchain(genesis, 1)
+    }
 }

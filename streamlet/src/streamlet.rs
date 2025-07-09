@@ -313,6 +313,7 @@ impl Streamlet {
                     info!("----------------------");
                     info!("----------------------");
                     info!("Leader is node {} | Epoch: {}", leader, epoch);
+                    self.blockchain.print();
                     if leader == self.environment.my_node.id {
                         let epoch = self.epoch.load(Ordering::SeqCst);
                         let transactions = self.transaction_generator.generate();
@@ -327,7 +328,8 @@ impl Streamlet {
                         StreamletMessage::Base(base_msg) => match base_msg {
                             BaseMessage::Propose(propose) => {
                                 info!("Received propose for epoch {}", propose.content.epoch);
-                                if !self.blocks.contains_key(&propose.content.epoch) {
+                                let leader = self.get_leader(propose.content.epoch);
+                                if !self.blocks.contains_key(&propose.content.epoch) && leader == sender {
                                     self.blocks.insert(propose.content.epoch, true);
                                     let length = self.blockchain.get_longest_chain().length;
                                     if propose.content.length == length + 1 {
