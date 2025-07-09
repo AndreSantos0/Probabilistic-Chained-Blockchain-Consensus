@@ -313,7 +313,7 @@ impl Streamlet {
                     info!("----------------------");
                     info!("----------------------");
                     info!("Leader is node {} | Epoch: {}", leader, epoch);
-                    self.blockchain.print();
+                    //self.blockchain.print();
                     if leader == self.environment.my_node.id {
                         let epoch = self.epoch.load(Ordering::SeqCst);
                         let transactions = self.transaction_generator.generate();
@@ -327,7 +327,7 @@ impl Streamlet {
                     match msg {
                         StreamletMessage::Base(base_msg) => match base_msg {
                             BaseMessage::Propose(propose) => {
-                                info!("Received propose for epoch {}", propose.content.epoch);
+                                //info!("Received propose for epoch {}", propose.content.epoch);
                                 let leader = self.get_leader(propose.content.epoch);
                                 if !self.blocks.contains_key(&propose.content.epoch) && leader == sender {
                                     self.blocks.insert(propose.content.epoch, true);
@@ -339,7 +339,7 @@ impl Streamlet {
                                 }
                             }
                             BaseMessage::Vote(vote) => {
-                                info!("Received vote for epoch {}", vote.content.epoch);
+                                //info!("Received vote for epoch {}", vote.content.epoch);
                                 let nodes_voted = self.votes_ids.entry(vote.content.clone()).or_insert_with(Vec::new);
                                 if !nodes_voted.contains(&sender) {
                                     nodes_voted.push(sender);

@@ -35,7 +35,11 @@ impl Blockchain {
     }
 
     fn find_parent_block(&self, block: &StreamletBlock) -> Option<&StreamletBlock> {
-        self.nodes.get(&block.hash)
+        let p = self.nodes.get(&block.hash);
+        if let Some(b) = p {
+            assert_eq!(b.length + 1, block.length);
+        }
+        p
     }
 
     pub async fn handle_notarization(&mut self, block: &StreamletBlock, finalize_sender: &Sender<Vec<StreamletBlock>>) -> Vec<Epoch> {
@@ -44,6 +48,7 @@ impl Blockchain {
                 self.nodes.insert(Self::hash(block), block.clone());
 
                 while let Some(index) = self.rushed.iter().position(|rushed| self.find_parent_block(rushed).is_some()) {
+                    println!("{}", index);
                     let rushed = self.rushed.remove(index);
                     self.nodes.insert(Self::hash(&rushed), rushed);
                 }
