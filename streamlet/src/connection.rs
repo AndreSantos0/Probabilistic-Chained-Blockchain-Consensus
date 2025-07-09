@@ -8,8 +8,6 @@ use tokio::io::{AsyncWriteExt};
 use tokio::net::{TcpStream};
 
 pub const NONCE_BYTES_LENGTH: usize = 32;
-pub const MESSAGE_BYTES_LENGTH: usize = 4;
-pub const SIGNATURE_BYTES_LENGTH: usize = 64;
 
 
 pub fn generate_nonce() -> [u8; NONCE_BYTES_LENGTH] {
