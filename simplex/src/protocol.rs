@@ -153,18 +153,6 @@ pub trait Protocol {
         reset_timer_sender: Sender<()>,
         finalize_sender: Sender<Vec<NotarizedBlock>>,
     ) {
-        let mut n_proposals = 0;
-        self.handle_iteration_advance(&dispatcher_queue_sender, &reset_timer_sender, &finalize_sender).await;
-
-        while n_proposals < Self::PROPOSALS_BEFORE_COUNTDOWN {
-            if let Some((sender, message)) = consumer_queue_receiver.recv().await {
-                if message.is_propose() {
-                    n_proposals += 1;
-                }
-                self.handle_message(sender, message, &dispatcher_queue_sender, &reset_timer_sender, &finalize_sender).await;
-            }
-        }
-
         let start = tokio::time::Instant::now();
         while start.elapsed() < Duration::from_secs(Self::EXECUTION_TIME_SECS) {
             if let Some((sender, message)) = consumer_queue_receiver.recv().await {
@@ -172,13 +160,7 @@ pub trait Protocol {
             }
         }
 
-        let finalized_blocks = if self.get_finalized_blocks() > Self::PROPOSALS_BEFORE_COUNTDOWN {
-            self.get_finalized_blocks() - Self::PROPOSALS_BEFORE_COUNTDOWN
-        } else {
-            self.get_finalized_blocks()
-        };
-
-        println!("Blocks finalized: {} ", finalized_blocks);
+        println!("Blocks finalized: {} ", self.get_finalized_blocks());
         println!("Average finalization time (ms): {}", self.get_finalization_time());
         std::process::exit(0);
     }
