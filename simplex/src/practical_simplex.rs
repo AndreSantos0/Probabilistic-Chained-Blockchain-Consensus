@@ -166,7 +166,6 @@ impl Protocol for PracticalSimplex {
     ) {
         loop {
             let iteration = self.iteration.load(Ordering::Acquire);
-            self.finalization_timestamps.insert(iteration, Latency { start: SystemTime::now(), finalization: None });
             let leader = Self::get_leader(self.environment.nodes.len(), iteration);
             self.is_timeout.store(false, Ordering::Release);
             self.clear_timeouts(iteration);
@@ -423,6 +422,7 @@ impl PracticalSimplex {
             let header = SimplexBlockHeader::from(&propose.content);
             self.proposes.insert(propose.content.iteration, header.clone());
             self.transactions.insert(propose.content.iteration, propose.content.transactions);
+            self.finalization_timestamps.insert(iteration, Latency { start: SystemTime::now(), finalization: None });
 
             if iteration == propose.content.iteration {
                 if self.is_extendable(&header) && !self.is_timeout.load(Ordering::Acquire) {

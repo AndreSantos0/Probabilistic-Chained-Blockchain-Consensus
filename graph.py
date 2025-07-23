@@ -1,63 +1,67 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
 
-sns.set_theme(style="whitegrid")
+simplex = pd.read_csv('simplex_2.csv', sep=';', comment='#')
+pro_simplex = pd.read_csv('pro_simplex_2.csv', sep=';', comment='#')
 
-# Load and prepare both datasets
-df1 = pd.read_csv('simplex.csv', sep=';', decimal=',')
-df2 = pd.read_csv('pro_simplex.csv', sep=';', decimal=',')
+simplex['dataset'] = 'Simplex'
+pro_simplex['dataset'] = 'Pro Simplex'
 
-df1['txs_sec'] = df1['txs_sec'].astype(float)
-df2['txs_sec'] = df2['txs_sec'].astype(float)
+df = pd.concat([simplex, pro_simplex])
 
-df1['Protocol'] = 'Simplex'
-df2['Protocol'] = 'ProSimplex'
+tx_sizes = sorted(df['tx_size_bytes'].unique())
 
-df = pd.concat([df1, df2], ignore_index=True)
+fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 
-palette = {
-    'Simplex': '#1f77b4',      # Blue
-    'ProSimplex': '#ff7f0e'    # Orange
-}
+for col, tx_size in enumerate(tx_sizes):
+    ax_lat = axes[0, col]
+    all_nodes_lat = set()
 
-# Group by tx_size_bytes
-for tx_size, sub_df in df.groupby('tx_size_bytes'):
-    grouped = sub_df.groupby('txs_per_block')
-    fig, axes = plt.subplots(1, len(grouped), figsize=(6 * len(grouped), 6), sharey=True)
-
-    # Handle the case of a single subplot
-    if len(grouped) == 1:
-        axes = [axes]
-
-    for ax, (txs_per_block, group) in zip(axes, grouped):
-        stats = group.groupby(['num_nodes', 'Protocol'])['txs_sec'].agg(['mean', 'std']).reset_index()
-        num_nodes = sorted(stats['num_nodes'].unique())
-        protocols = stats['Protocol'].unique()
-
-        x = np.arange(len(num_nodes))
-        width = 0.35
-
-        for i, protocol in enumerate(protocols):
-            data = stats[stats['Protocol'] == protocol]
-            ax.bar(
-                x + i * width,
-                data['mean'],
-                width=width,
-                yerr=data['std'],
-                capsize=5,
-                label=protocol,
-                color=palette[protocol]
+    for dataset in df['dataset'].unique():
+        for txs in sorted(df['txs_per_block'].unique()):
+            subset = df[(df['dataset'] == dataset) &
+                        (df['txs_per_block'] == txs) &
+                        (df['tx_size_bytes'] == tx_size)].sort_values('num_nodes')
+            if subset.empty:
+                continue
+            all_nodes_lat.update(subset['num_nodes'].unique())
+            ax_lat.plot(
+                subset['num_nodes'].to_numpy(),
+                subset['latency'].to_numpy(),
+                marker='o',
+                label=f'{dataset}, txs/block={txs}'
             )
+    ax_lat.set_xlabel('Number of Nodes')
+    ax_lat.set_ylabel('Latency (sec)')
+    ax_lat.set_title(f'Latency vs Number of Nodes\n(tx_size_bytes={tx_size})')
+    ax_lat.set_xticks(sorted(all_nodes_lat))
+    ax_lat.legend(fontsize='small')
+    ax_lat.grid(True)
 
-        ax.set_title(f'{txs_per_block} txs of {tx_size} bytes')
-        ax.set_xlabel('Number of Nodes')
-        ax.set_xticks(x + width / 2)
-        ax.set_xticklabels([str(n) for n in num_nodes])
 
-    axes[0].set_ylabel('Throughput (txs/s)')
-    axes[0].legend(title='Protocol', loc='upper left')
-    fig.suptitle(f'Throughput Comparison for {tx_size} Bytes Transactions', fontsize=16)
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-    plt.show()
+    ax_txs = axes[1, col]
+    all_nodes_txs = set()
+
+    for dataset in df['dataset'].unique():
+        for txs in sorted(df['txs_per_block'].unique()):
+            subset = df[(df['dataset'] == dataset) &
+                        (df['txs_per_block'] == txs) &
+                        (df['tx_size_bytes'] == tx_size)].sort_values('num_nodes')
+            if subset.empty:
+                continue
+            all_nodes_txs.update(subset['num_nodes'].unique())
+            ax_txs.plot(
+                subset['num_nodes'].to_numpy(),
+                subset['txs_sec'].to_numpy(),
+                marker='o',
+                label=f'{dataset}, txs/block={txs}'
+            )
+    ax_txs.set_xlabel('Number of Nodes')
+    ax_txs.set_ylabel('Transactions per Second')
+    ax_txs.set_title(f'Transactions per Second vs Number of Nodes\n(tx_size_bytes={tx_size})')
+    ax_txs.set_xticks(sorted(all_nodes_txs))
+    ax_txs.legend(fontsize='small')
+    ax_txs.grid(True)
+
+plt.tight_layout()
+plt.show()
