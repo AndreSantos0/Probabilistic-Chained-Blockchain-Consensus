@@ -700,7 +700,9 @@ impl ProbabilisticSimplex {
             finalizes.push(sender);
             if finalizes.len() == self.probabilistic_quorum_size && self.finalized_height < finalize.iter {
                 if finalize.iter < self.iteration.load(Ordering::Acquire) {
-                    self.finalization_timestamps.get_mut(&finalize.iter).unwrap().finalization = Some(SystemTime::now());
+                    if self.finalization_timestamps.get_mut(&finalize.iter).is_some() {
+                        self.finalization_timestamps.get_mut(&finalize.iter).unwrap().finalization = Some(SystemTime::now());
+                    }
                     self.finalize(finalize.iter, finalize_sender).await;
                     self.proposes.retain(|iteration, _| *iteration + FINALIZATION_GAP > finalize.iter);
                     self.finalizes.retain(|iteration, _| *iteration > finalize.iter);
