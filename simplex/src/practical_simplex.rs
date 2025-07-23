@@ -179,6 +179,7 @@ impl Protocol for PracticalSimplex {
                 let block = self.get_next_block(iteration, transactions);
                 info!("Proposed {}", block.length);
                 let propose = self.create_proposal(block);
+                self.finalization_timestamps.insert(iteration, Latency { start: SystemTime::now(), finalization: None });
                 let _ = dispatcher_queue_sender.send(propose).await;
             }
 
@@ -422,7 +423,6 @@ impl PracticalSimplex {
             let header = SimplexBlockHeader::from(&propose.content);
             self.proposes.insert(propose.content.iteration, header.clone());
             self.transactions.insert(propose.content.iteration, propose.content.transactions);
-            self.finalization_timestamps.insert(iteration, Latency { start: SystemTime::now(), finalization: None });
 
             if iteration == propose.content.iteration {
                 if self.is_extendable(&header) && !self.is_timeout.load(Ordering::Acquire) {

@@ -192,6 +192,7 @@ impl Protocol for ProbabilisticSimplex {
                 let block = self.get_next_block(iteration, transactions);
                 info!("Proposed {}", block.length);
                 let propose = self.create_proposal(block);
+                self.finalization_timestamps.insert(iteration, Latency { start: SystemTime::now(), finalization: None });
                 let _ = dispatcher_queue_sender.send(propose).await;
             }
 
@@ -540,7 +541,6 @@ impl ProbabilisticSimplex {
             let header = SimplexBlockHeader::from(&propose.content);
             self.proposes.insert(propose.content.iteration, header.clone());
             self.transactions.insert(propose.content.iteration, propose.content.transactions);
-            self.finalization_timestamps.insert(iteration, Latency { start: SystemTime::now(), finalization: None });
             if propose.content.iteration == iteration {
                 if self.is_extendable(&header) && !self.is_timeout.load(Ordering::Acquire) {
                     let vote = Self::create_vote(iteration, header.clone());
