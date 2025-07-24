@@ -153,6 +153,7 @@ pub trait Protocol {
         reset_timer_sender: Sender<()>,
         finalize_sender: Sender<Vec<NotarizedBlock>>,
     ) {
+        self.handle_iteration_advance(&dispatcher_queue_sender, &reset_timer_sender, &finalize_sender).await;
         let start = tokio::time::Instant::now();
         while start.elapsed() < Duration::from_secs(Self::EXECUTION_TIME_SECS) {
             if let Some((sender, message)) = consumer_queue_receiver.recv().await {

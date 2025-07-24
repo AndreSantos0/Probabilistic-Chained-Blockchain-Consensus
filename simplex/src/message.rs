@@ -33,8 +33,6 @@ pub struct ProbVote {
     pub iteration: Iteration,
     pub header: SimplexBlockHeader,
     pub signature: Vec<u8>,
-    pub sample: Vec<u32>,
-    pub proof: Vec<u8>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
@@ -143,11 +141,7 @@ impl SimplexMessage for ProbabilisticSimplexMessage {
     }
 
     fn get_sample_set(&self) -> Option<&Vec<u32>> {
-        match self {
-            Self::Vote(v) => Some(&v.sample),
-            Self::Finalize(v) => Some(&v.sample),
-            _ => None,
-        }
+        None
     }
 }
 
