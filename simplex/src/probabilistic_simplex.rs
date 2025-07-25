@@ -192,8 +192,10 @@ impl Protocol for ProbabilisticSimplex {
                 let transactions = self.transaction_generator.generate();
                 let block = self.get_next_block(iteration, transactions);
                 info!("Proposed {}", block.length);
-                let propose = self.create_proposal(block);
+                let (header, signatures) = self.last_notarized();
+                let propose = Dispatch::ProbPropose(block.clone(), header.iteration, signatures.clone());
                 let _ = dispatcher_queue_sender.send(propose).await;
+                self.handle_propose(ProbPropose { content: block, last_notarized_iter: header.iteration, last_notarized_cert: signatures.clone() }, my_node_id, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
             }
 
             if let Some(propose_header) = self.proposes.get(&iteration) {
@@ -312,7 +314,6 @@ impl ProbabilisticSimplex {
             Dispatch::ProbPropose(block, last_notarized_iter, last_notarized_cert) => {
                 let propose = ProbabilisticSimplexMessage::Propose(ProbPropose { content: block, last_notarized_iter, last_notarized_cert });
                 broadcast(private_key, connections, &propose, enable_crypto).await;
-                let _ = message_queue_sender.send((my_node_id, propose)).await;
             }
             Dispatch::Vote(iteration, header) => {
                 let leader = Self::get_leader(n_nodes, iteration + 1);
@@ -404,7 +405,7 @@ impl ProbabilisticSimplex {
             self.proposes.insert(propose.content.iteration, header.clone());
             self.transactions.insert(propose.content.iteration, propose.content.transactions);
 
-            if propose.content.iteration == iteration {
+            if propose.content.iteration == iteration && leader == self.environment.my_node.id {
                 if let Some(votes) = self.votes.get(&header) {
                     if votes.len() >= self.quorum_size {
                         self.handle_notarization(header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
