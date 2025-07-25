@@ -402,6 +402,7 @@ impl ProbabilisticSimplex {
                         self.handle_notarization(header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                         self.finalize(propose.content.iteration - 1, finalize_sender).await;
                         self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                        return;
                     }
                 }
             }
