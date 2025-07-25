@@ -303,7 +303,6 @@ impl ProbabilisticSimplex {
             Dispatch::ProbPropose(block, last_notarized_iter, last_notarized_cert) => {
                 let propose = ProbabilisticSimplexMessage::Propose(ProbPropose { content: block, last_notarized_iter, last_notarized_cert });
                 broadcast(private_key, connections, &propose, enable_crypto).await;
-                let _ = message_queue_sender.send((my_node_id, propose)).await;
             }
             Dispatch::Vote(iteration, header) => {
                 let leader = Self::get_leader(n_nodes, iteration + 1);
@@ -396,6 +395,7 @@ impl ProbabilisticSimplex {
             self.transactions.insert(propose.content.iteration, propose.content.transactions);
             self.finalization_timestamps.insert(propose.content.iteration, Latency { start: SystemTime::now(), finalization: None });
 
+            /*
             if propose.content.iteration == iteration {
                 if let Some(votes) = self.votes.get(&header) {
                     if votes.len() >= self.quorum_size {
@@ -406,6 +406,7 @@ impl ProbabilisticSimplex {
                     }
                 }
             }
+             */
 
             if (propose.content.iteration == iteration + 1 || propose.content.iteration == 1) && (propose.last_notarized_iter == iteration || propose.last_notarized_iter == 0) && propose.last_notarized_cert.len() >= self.quorum_size {
                 if self.proposes.contains_key(&propose.last_notarized_iter) {
