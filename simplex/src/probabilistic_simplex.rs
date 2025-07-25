@@ -236,6 +236,14 @@ impl Protocol for ProbabilisticSimplex {
 
                     continue
                 }
+
+                if let Some(votes) = self.votes.get(&propose_header) {
+                    if votes.len() >= self.quorum_size {
+                        self.handle_notarization(propose_header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                        self.finalize(propose_header.iteration - 1, finalize_sender).await;
+                        continue
+                    }
+                }
             }
 
             break
@@ -395,18 +403,6 @@ impl ProbabilisticSimplex {
             self.transactions.insert(propose.content.iteration, propose.content.transactions);
             self.finalization_timestamps.insert(propose.content.iteration, Latency { start: SystemTime::now(), finalization: None });
 
-            /*
-            if propose.content.iteration == iteration {
-                if let Some(votes) = self.votes.get(&header) {
-                    if votes.len() >= self.quorum_size {
-                        self.handle_notarization(header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
-                        self.finalize(propose.content.iteration - 1, finalize_sender).await;
-                        self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
-                        return;
-                    }
-                }
-            }
-             */
 
             if (propose.content.iteration == iteration + 1 || propose.content.iteration == 1) && (propose.last_notarized_iter == iteration || propose.last_notarized_iter == 0) && propose.last_notarized_cert.len() >= self.quorum_size {
                 if self.proposes.contains_key(&propose.last_notarized_iter) {
