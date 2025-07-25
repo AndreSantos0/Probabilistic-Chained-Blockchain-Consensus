@@ -192,10 +192,8 @@ impl Protocol for ProbabilisticSimplex {
                 let transactions = self.transaction_generator.generate();
                 let block = self.get_next_block(iteration, transactions);
                 info!("Proposed {}", block.length);
-                let (header, signatures) = self.last_notarized();
-                let propose = Dispatch::ProbPropose(block.clone(), header.iteration, signatures.clone());
+                let propose = self.create_proposal(block);
                 let _ = dispatcher_queue_sender.send(propose).await;
-                self.handle_propose(ProbPropose { content: block, last_notarized_iter: header.iteration, last_notarized_cert: signatures.clone() }, my_node_id, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
             }
 
             if let Some(propose_header) = self.proposes.get(&iteration) {
@@ -314,6 +312,7 @@ impl ProbabilisticSimplex {
             Dispatch::ProbPropose(block, last_notarized_iter, last_notarized_cert) => {
                 let propose = ProbabilisticSimplexMessage::Propose(ProbPropose { content: block, last_notarized_iter, last_notarized_cert });
                 broadcast(private_key, connections, &propose, enable_crypto).await;
+                let _ = message_queue_sender.send((my_node_id, propose)).await;
             }
             Dispatch::Vote(iteration, header) => {
                 let leader = Self::get_leader(n_nodes, iteration + 1);
@@ -405,18 +404,62 @@ impl ProbabilisticSimplex {
             self.proposes.insert(propose.content.iteration, header.clone());
             self.transactions.insert(propose.content.iteration, propose.content.transactions);
 
-            if propose.content.iteration == iteration && leader == self.environment.my_node.id {
+            if propose.content.iteration == iteration  {
                 if let Some(votes) = self.votes.get(&header) {
-                    if votes.len() >= self.quorum_size {
+                    if votes.len() >= self.quorum_size && leader == self.environment.my_node.id {
                         self.handle_notarization(header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                         self.finalize(propose.content.iteration - 1, finalize_sender).await;
                         self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                         return;
                     }
                 }
+                if self.proposes.contains_key(&(propose.content.iteration + 1)) {
+                    let last_notarized_header = self.proposes.get(&(propose.content.iteration)).unwrap();
+                    let certificate = self.propose_certificates.remove(&(propose.content.iteration)).unwrap();
+                    if propose.content.iteration > 1 {
+                        let serialized_message = match serialize(&last_notarized_header) {
+                            Ok(msg) => msg,
+                            Err(e) => {
+                                error!("Failed to serialize message: {}", e);
+                                return;
+                            }
+                        };
+
+                        let messages: Vec<&[u8]> = (0..certificate.len()).map(|_| serialized_message.as_slice()).collect();
+                        let signatures: Vec<Signature> = certificate.iter().map(
+                            |vote_signature| Signature::from_bytes(vote_signature.signature.as_ref()).unwrap()
+                        ).collect();
+                        let mut keys = Vec::with_capacity(certificate.len());
+                        for vote_signature in &certificate {
+                            match self.public_keys.get(&vote_signature.node) {
+                                Some(key) => keys.push(*key),
+                                None => return,
+                            }
+                        }
+
+                        if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
+                            return;
+                        }
+                        self.votes.insert(last_notarized_header.clone(), certificate);
+                    }
+
+                    if self.is_extendable(self.proposes.get(&(propose.content.iteration + 1)).unwrap()) {
+                        let vote = Self::create_vote(propose.content.iteration + 1, header.clone());
+                        let _ = dispatcher_queue_sender.send(vote).await;
+                    };
+                    if propose.content.iteration + 1 > 1 {
+                        self.handle_notarization(propose.content.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                        self.finalize(propose.content.iteration - 1, finalize_sender).await;
+                        self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                    }
+
+                    return;
+                }
             }
 
-            if (propose.content.iteration == iteration + 1 || propose.content.iteration == 1) && (propose.last_notarized_iter == iteration || propose.last_notarized_iter == 0) && propose.last_notarized_cert.len() >= self.quorum_size {
+            if (propose.content.iteration == iteration + 1 || propose.content.iteration == 1) &&
+                (propose.last_notarized_iter == iteration || propose.last_notarized_iter == 0) &&
+                propose.last_notarized_cert.len() >= self.quorum_size {
                 if self.proposes.contains_key(&propose.last_notarized_iter) {
                     let last_notarized_header = self.proposes.get(&propose.last_notarized_iter).unwrap();
 
@@ -453,10 +496,13 @@ impl ProbabilisticSimplex {
                     };
                     if propose.content.iteration > 1 {
                         self.handle_notarization(propose.last_notarized_iter, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
-                        self.finalize(iteration, finalize_sender).await;
+                        self.finalize(propose.last_notarized_iter - 1, finalize_sender).await;
                         self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                     }
 
+                    return;
+                } else {
+                    self.propose_certificates.insert(propose.last_notarized_iter, propose.last_notarized_cert);
                     return;
                 }
             }
