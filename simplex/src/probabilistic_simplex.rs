@@ -179,6 +179,7 @@ impl Protocol for ProbabilisticSimplex {
     ) {
         loop {
             let iteration = self.iteration.load(Ordering::Acquire);
+            self.finalization_timestamps.insert(iteration, Latency { start: SystemTime::now(), finalization: None });
             let leader = Self::get_leader(self.environment.nodes.len(), iteration);
             self.is_timeout.store(false, Ordering::Release);
             self.clear_timeouts(iteration);
@@ -402,8 +403,17 @@ impl ProbabilisticSimplex {
             let header = SimplexBlockHeader::from(&propose.content);
             self.proposes.insert(propose.content.iteration, header.clone());
             self.transactions.insert(propose.content.iteration, propose.content.transactions);
-            self.finalization_timestamps.insert(propose.content.iteration, Latency { start: SystemTime::now(), finalization: None });
 
+            if propose.content.iteration == iteration {
+                if let Some(votes) = self.votes.get(&header) {
+                    if votes.len() >= self.quorum_size {
+                        self.handle_notarization(header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                        self.finalize(propose.content.iteration - 1, finalize_sender).await;
+                        self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                        return;
+                    }
+                }
+            }
 
             if (propose.content.iteration == iteration + 1 || propose.content.iteration == 1) && (propose.last_notarized_iter == iteration || propose.last_notarized_iter == 0) && propose.last_notarized_cert.len() >= self.quorum_size {
                 if self.proposes.contains_key(&propose.last_notarized_iter) {
