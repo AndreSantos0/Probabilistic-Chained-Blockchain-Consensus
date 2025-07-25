@@ -239,8 +239,8 @@ impl Protocol for ProbabilisticSimplex {
 
                 if let Some(votes) = self.votes.get(&propose_header) {
                     if votes.len() >= self.quorum_size {
-                        self.handle_notarization(propose_header.iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
-                        self.finalize(propose_header.iteration - 1, finalize_sender).await;
+                        self.handle_notarization(iteration, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
+                        self.finalize(iteration - 1, finalize_sender).await;
                         continue
                     }
                 }
