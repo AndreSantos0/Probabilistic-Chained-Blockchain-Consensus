@@ -197,6 +197,7 @@ impl Protocol for ProbabilisticSimplex {
                 self.transactions.insert(iteration, block.transactions.clone());
                 let propose = self.create_proposal(block);
                 let _ = dispatcher_queue_sender.send(propose).await;
+                break
             }
 
             if let Some(propose_header) = self.proposes.get(&iteration) {
