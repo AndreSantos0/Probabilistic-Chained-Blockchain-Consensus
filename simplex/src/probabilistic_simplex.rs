@@ -461,11 +461,8 @@ impl ProbabilisticSimplex {
             if (propose.content.iteration == iteration + 1 || propose.content.iteration == 1) &&
                 (propose.last_notarized_iter == iteration || propose.last_notarized_iter == 0) &&
                 propose.last_notarized_cert.len() >= self.quorum_size {
-                info!("AAA");
                 if self.proposes.contains_key(&propose.last_notarized_iter) {
-                    info!("BBB");
                     let last_notarized_header = self.proposes.get(&propose.last_notarized_iter).unwrap();
-
                     if propose.content.iteration > 1 {
                         let serialized_message = match serialize(&last_notarized_header) {
                             Ok(msg) => msg,
@@ -494,12 +491,10 @@ impl ProbabilisticSimplex {
                     }
                     self.votes.insert(last_notarized_header.clone(), propose.last_notarized_cert);
                     if self.is_extendable(&header) {
-                        info!("CCC");
                         let vote = Self::create_vote(propose.content.iteration, header.clone());
                         let _ = dispatcher_queue_sender.send(vote).await;
                     };
                     if propose.content.iteration > 1 {
-                        info!("DDD");
                         self.handle_notarization(propose.last_notarized_iter, dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
                         self.finalize(propose.last_notarized_iter - 1, finalize_sender).await;
                         self.handle_iteration_advance(dispatcher_queue_sender, reset_timer_sender, finalize_sender).await;
