@@ -192,6 +192,9 @@ impl Protocol for ProbabilisticSimplex {
                 let transactions = self.transaction_generator.generate();
                 let block = self.get_next_block(iteration, transactions);
                 info!("Proposed {}", block.length);
+                let (header, _) = self.last_notarized();
+                self.proposes.insert(iteration, header.clone());
+                self.transactions.insert(iteration, block.transactions.clone());
                 let propose = self.create_proposal(block);
                 let _ = dispatcher_queue_sender.send(propose).await;
             }
@@ -403,7 +406,7 @@ impl ProbabilisticSimplex {
             let header = SimplexBlockHeader::from(&propose.content);
             self.proposes.insert(propose.content.iteration, header.clone());
             self.transactions.insert(propose.content.iteration, propose.content.transactions);
-
+            /*
             if propose.content.iteration == iteration  {
                 if let Some(votes) = self.votes.get(&header) {
                     if votes.len() >= self.quorum_size && leader == self.environment.my_node.id {
@@ -456,6 +459,7 @@ impl ProbabilisticSimplex {
                     return;
                 }
             }
+             */
 
             if (propose.content.iteration == iteration + 1 || propose.content.iteration == 1) &&
                 (propose.last_notarized_iter == iteration || propose.last_notarized_iter == 0) &&
