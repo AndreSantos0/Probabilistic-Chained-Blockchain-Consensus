@@ -192,12 +192,8 @@ impl Protocol for ProbabilisticSimplex {
                 let transactions = self.transaction_generator.generate();
                 let block = self.get_next_block(iteration, transactions);
                 info!("Proposed {}", block.length);
-                let (header, _) = self.last_notarized();
-                self.proposes.insert(iteration, header.clone());
-                self.transactions.insert(iteration, block.transactions.clone());
                 let propose = self.create_proposal(block);
                 let _ = dispatcher_queue_sender.send(propose).await;
-                break
             }
 
             if let Some(propose_header) = self.proposes.get(&iteration) {
@@ -316,6 +312,7 @@ impl ProbabilisticSimplex {
             Dispatch::ProbPropose(block, last_notarized_iter, last_notarized_cert) => {
                 let propose = ProbabilisticSimplexMessage::Propose(ProbPropose { content: block, last_notarized_iter, last_notarized_cert });
                 broadcast(private_key, connections, &propose, enable_crypto).await;
+                let _ = message_queue_sender.send((my_node_id, propose)).await;
             }
             Dispatch::Vote(iteration, header) => {
                 let leader = Self::get_leader(n_nodes, iteration + 1);
@@ -407,7 +404,7 @@ impl ProbabilisticSimplex {
             let header = SimplexBlockHeader::from(&propose.content);
             self.proposes.insert(propose.content.iteration, header.clone());
             self.transactions.insert(propose.content.iteration, propose.content.transactions);
-            /*
+
             if propose.content.iteration == iteration  {
                 if let Some(votes) = self.votes.get(&header) {
                     if votes.len() >= self.quorum_size && leader == self.environment.my_node.id {
@@ -444,9 +441,9 @@ impl ProbabilisticSimplex {
                         if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
                             return;
                         }
-                        self.votes.insert(last_notarized_header.clone(), certificate);
-                    }
 
+                    }
+                    self.votes.insert(last_notarized_header.clone(), certificate);
                     if self.is_extendable(self.proposes.get(&(propose.content.iteration + 1)).unwrap()) {
                         let vote = Self::create_vote(propose.content.iteration + 1, header.clone());
                         let _ = dispatcher_queue_sender.send(vote).await;
@@ -460,7 +457,6 @@ impl ProbabilisticSimplex {
                     return;
                 }
             }
-             */
 
             if (propose.content.iteration == iteration + 1 || propose.content.iteration == 1) &&
                 (propose.last_notarized_iter == iteration || propose.last_notarized_iter == 0) &&
@@ -494,9 +490,9 @@ impl ProbabilisticSimplex {
                         if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
                             return;
                         }
-                        self.votes.insert(last_notarized_header.clone(), propose.last_notarized_cert);
-                    }
 
+                    }
+                    self.votes.insert(last_notarized_header.clone(), propose.last_notarized_cert);
                     if self.is_extendable(&header) {
                         info!("CCC");
                         let vote = Self::create_vote(propose.content.iteration, header.clone());
