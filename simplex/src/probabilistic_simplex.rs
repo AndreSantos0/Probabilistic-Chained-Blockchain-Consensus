@@ -315,7 +315,6 @@ impl ProbabilisticSimplex {
             Dispatch::ProbPropose(block, last_notarized_iter, last_notarized_cert) => {
                 let propose = ProbabilisticSimplexMessage::Propose(ProbPropose { content: block, last_notarized_iter, last_notarized_cert });
                 broadcast(private_key, connections, &propose, enable_crypto).await;
-                let _ = message_queue_sender.send((my_node_id, propose)).await;
             }
             Dispatch::Vote(iteration, header) => {
                 let leader = Self::get_leader(n_nodes, iteration + 1);
