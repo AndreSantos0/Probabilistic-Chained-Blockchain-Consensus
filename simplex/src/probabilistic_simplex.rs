@@ -608,8 +608,8 @@ impl ProbabilisticSimplex {
         let mut blocks_to_be_finalized: Vec<NotarizedBlock> = Vec::new();
         if self.finalized_height + 1 <= iteration {
             for iter in self.finalized_height + 1 ..= iteration {
-                if self.finalization_timestamps.get_mut(&iter).is_some() {
-                    self.finalization_timestamps.get_mut(&iter).unwrap().finalization = Some(SystemTime::now());
+                if let Some(x) = self.finalization_timestamps.get_mut(&iter) {
+                    x.finalization = Some(SystemTime::now());
                 }
                 let header = self.proposes.get(&iter).unwrap().clone();
                 let signatures = self.votes.get(&header).unwrap().clone();
