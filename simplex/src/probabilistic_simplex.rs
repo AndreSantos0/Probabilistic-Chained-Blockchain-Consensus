@@ -1,3 +1,4 @@
+use std::cmp;
 use crate::block::{SimplexBlockHeader, SimplexBlock, VoteSignature, NodeId, NotarizedBlock, Iteration, hash};
 use crate::connection::{broadcast, broadcast_to_sample, generate_nonce, unicast, MESSAGE_BYTES_LENGTH, NONCE_BYTES_LENGTH, SIGNATURE_BYTES_LENGTH};
 use crate::message::{Dispatch, ProbFinalize, ProbPropose, ProbVote, ProbabilisticSimplexMessage, Reply, Request, SimplexMessage, Timeout};
@@ -45,7 +46,7 @@ pub struct ProbabilisticSimplex {
 }
 
 const CONST_O: f32 = 1.7;
-const CONST_L: f32 = 1.0;
+const CONST_L: f32 = 2.0;
 const FINALIZATION_GAP: u32 = 10;
 
 impl Protocol for ProbabilisticSimplex {
@@ -60,7 +61,7 @@ impl Protocol for ProbabilisticSimplex {
             environment,
             quorum_size: n * 2 / 3 + 1,
             probabilistic_quorum_size: (CONST_L * (n as f32).sqrt()).floor() as usize,
-            sample_size: (CONST_O * CONST_L * (n as f32).sqrt()).floor() as usize,
+            sample_size: cmp::min((CONST_O * CONST_L * (n as f32).sqrt()).floor() as usize, n),
             iteration: Arc::new(AtomicU32::new(Self::INITIAL_ITERATION)),
             is_timeout: Arc::new(AtomicBool::new(false)),
             blocks_finalized: 0,
