@@ -1,20 +1,25 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 
+# Load datasets
 simplex = pd.read_csv('simplex_2.csv', sep=';', comment='#')
 pro_simplex = pd.read_csv('pro_simplex_2.csv', sep=';', comment='#')
+hotstuff = pd.read_csv('hotstuff_2.csv', sep=';', comment='#')
 
+# Label datasets
 simplex['dataset'] = 'Simplex'
 pro_simplex['dataset'] = 'Pro Simplex'
+hotstuff['dataset'] = 'Jolteon'
 
-df = pd.concat([simplex, pro_simplex])
+# Combine all into a single DataFrame
+df = pd.concat([simplex, pro_simplex, hotstuff])
 
 tx_sizes = sorted(df['tx_size_bytes'].unique())
 
-fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-
-for col, tx_size in enumerate(tx_sizes):
-    ax_lat = axes[0, col]
+for tx_size in tx_sizes:
+    # ---------- LATENCY PLOT ----------
+    plt.figure(figsize=(8, 6))
+    ax_lat = plt.gca()
     all_nodes_lat = set()
 
     for dataset in df['dataset'].unique():
@@ -31,15 +36,19 @@ for col, tx_size in enumerate(tx_sizes):
                 marker='o',
                 label=f'{dataset}, txs/block={txs}'
             )
+
     ax_lat.set_xlabel('Number of Nodes')
     ax_lat.set_ylabel('Latency (sec)')
     ax_lat.set_title(f'Latency vs Number of Nodes\n(tx_size_bytes={tx_size})')
     ax_lat.set_xticks(sorted(all_nodes_lat))
     ax_lat.legend(fontsize='small')
     ax_lat.grid(True)
+    plt.tight_layout()
+    plt.show()
 
-
-    ax_txs = axes[1, col]
+    # ---------- THROUGHPUT PLOT ----------
+    plt.figure(figsize=(8, 6))
+    ax_txs = plt.gca()
     all_nodes_txs = set()
 
     for dataset in df['dataset'].unique():
@@ -56,12 +65,12 @@ for col, tx_size in enumerate(tx_sizes):
                 marker='o',
                 label=f'{dataset}, txs/block={txs}'
             )
+
     ax_txs.set_xlabel('Number of Nodes')
     ax_txs.set_ylabel('Transactions per Second')
     ax_txs.set_title(f'Transactions per Second vs Number of Nodes\n(tx_size_bytes={tx_size})')
     ax_txs.set_xticks(sorted(all_nodes_txs))
     ax_txs.legend(fontsize='small')
     ax_txs.grid(True)
-
-plt.tight_layout()
-plt.show()
+    plt.tight_layout()
+    plt.show()

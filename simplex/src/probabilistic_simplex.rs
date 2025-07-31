@@ -198,7 +198,7 @@ impl Protocol for ProbabilisticSimplex {
 
             if let Some(propose_header) = self.proposes.get(&iteration) {
                 if self.propose_certificates.contains_key(&iteration) {
-                    if propose_header.iteration > 1 {
+                    if propose_header.iteration > 1 && !self.environment.test_flag {
                         let certificate_votes = self.propose_certificates.get(&iteration).unwrap();
                         let serialized_message = match serialize(&propose_header) {
                             Ok(msg) => msg,
@@ -417,7 +417,7 @@ impl ProbabilisticSimplex {
                 if self.proposes.contains_key(&(propose.content.iteration + 1)) {
                     let last_notarized_header = self.proposes.get(&(propose.content.iteration)).unwrap();
                     let certificate = self.propose_certificates.remove(&(propose.content.iteration)).unwrap();
-                    if propose.content.iteration > 1 {
+                    if propose.content.iteration > 1 && !self.environment.test_flag {
                         let serialized_message = match serialize(&last_notarized_header) {
                             Ok(msg) => msg,
                             Err(e) => {
@@ -463,7 +463,7 @@ impl ProbabilisticSimplex {
                 propose.last_notarized_cert.len() >= self.quorum_size {
                 if self.proposes.contains_key(&propose.last_notarized_iter) {
                     let last_notarized_header = self.proposes.get(&propose.last_notarized_iter).unwrap();
-                    if propose.content.iteration > 1 {
+                    if propose.content.iteration > 1 && !self.environment.test_flag {
                         let serialized_message = match serialize(&last_notarized_header) {
                             Ok(msg) => msg,
                             Err(e) => {
