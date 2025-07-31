@@ -223,9 +223,8 @@ impl Protocol for ProbabilisticSimplex {
                         if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
                             return;
                         }
-                        self.votes.insert(propose_header.clone(), self.propose_certificates.remove(&iteration).unwrap());
                     }
-
+                    self.votes.insert(propose_header.clone(), self.propose_certificates.remove(&iteration).unwrap());
                     if self.is_extendable(propose_header) {
                         let vote = Self::create_vote(iteration, propose_header.clone());
                         let _ = dispatcher_queue_sender.send(vote).await;
