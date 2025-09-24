@@ -30,7 +30,7 @@ pub const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks_";
 
 pub trait Protocol {
 
-    const EXECUTION_TIME_SECS: u64 = 60;
+    const EXECUTION_TIME_SECS: u64 = 120;
     const MESSAGE_CHANNEL_SIZE: usize = 1000;
     const RESET_TIMER_CHANNEL_SIZE: usize = 100;
     const SOCKET_BINDING_DELAY: u64 = 5;
