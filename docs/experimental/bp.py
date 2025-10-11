@@ -13,7 +13,7 @@ files = ['simplex_bp.csv', 'pro_simplex_bp.csv']
 # Loop over both files
 for csv_file in files:
     # Load CSV with ; separator
-    df = pd.read_csv(csv_file, sep=';')
+    df = pd.read_csv(csv_file, sep=';', comment='#')
 
     # Create figure
     fig, ax = plt.subplots(figsize=(8, 7))
@@ -28,7 +28,7 @@ for csv_file in files:
             subset['txs_per_sec'].to_numpy(),
             subset['latency'].to_numpy(),
             marker='o',
-            label=f'{num_nodes} nodes'
+            label=f'{num_nodes} processes'
         )
 
         # Draw an arrow pointing to the 10000 txs_per_block point
@@ -36,14 +36,25 @@ for csv_file in files:
         if not row_10000.empty:
             x = row_10000['txs_per_sec'].values[0]
             y = row_10000['latency'].values[0]
+
+            # Decide offset direction: push text away from border
+            x_offset = 0.05 * max(subset['txs_per_sec'])
+            y_offset = 0.05 * max(subset['latency'])
+
+            if x > 0.8 * max(subset['txs_per_sec']):  # Too close to right border
+                x_offset = -x_offset
+            if y > 0.8 * max(subset['latency']):      # Too close to top border
+                y_offset = -y_offset
+
             ax.annotate(
                 "10K txs",
-                xy=(x, y),              # Point to this coordinate
-                xytext=(x+0.05*max(subset['txs_per_sec']), y+0.05*max(subset['latency'])),  # Offset
+                xy=(x, y),
+                xytext=(x + x_offset, y + y_offset),
                 arrowprops=dict(arrowstyle="->", lw=1.5, color='black'),
                 fontsize=14,
                 color='black',
-                ha='center'
+                ha='center',
+                clip_on=False
             )
 
     # Axis labels and title with consistent fonts and padding

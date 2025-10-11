@@ -23,19 +23,13 @@ df = pd.concat([simplex, pro_simplex, hotstuff])
 # --- Compute throughput dynamically ---
 df['txs_sec'] = (df['blocks_finalized'] * df['txs_per_block']) / df['duration_sec']
 
-# --- Aggregate to mean + std per group ---
+# --- Aggregate to mean per group (no std) ---
 agg_df = df.groupby(
     ['dataset', 'tx_size_bytes', 'txs_per_block', 'num_nodes']
 ).agg(
     latency_mean=('latency', 'mean'),
-    latency_std=('latency', 'std'),
-    txs_sec_mean=('txs_sec', 'mean'),
-    txs_sec_std=('txs_sec', 'std'),
+    txs_sec_mean=('txs_sec', 'mean')
 ).reset_index()
-
-# Replace NaN std (cases with 1 value) with 0
-agg_df['latency_std'] = agg_df['latency_std'].fillna(0)
-agg_df['txs_sec_std'] = agg_df['txs_sec_std'].fillna(0)
 
 # Unique values
 tx_sizes = sorted(agg_df['tx_size_bytes'].unique())
@@ -43,6 +37,47 @@ txs_per_block_vals = sorted(agg_df['txs_per_block'].unique())
 
 for tx_size in tx_sizes:
     for txs in txs_per_block_vals:
+        print(f"\n=== Results for {txs} txs of {tx_size} bytes ===")
+
+        # Filter relevant subset
+        subset_all = agg_df[
+            (agg_df['txs_per_block'] == txs) &
+            (agg_df['tx_size_bytes'] == tx_size)
+            ].sort_values(['num_nodes', 'dataset'])
+
+        # Get Pro Simplex reference
+        pro_ref = subset_all[subset_all['dataset'] == 'Pro Simplex']
+
+        for num_nodes in sorted(subset_all['num_nodes'].unique()):
+            print(f"\n--- {num_nodes} processes ---")
+
+            ref_row = pro_ref[pro_ref['num_nodes'] == num_nodes]
+            if ref_row.empty:
+                print("No Pro Simplex data for this config, skipping comparison.")
+                continue
+
+            pro_lat = ref_row['latency_mean'].values[0]
+            pro_thr = ref_row['txs_sec_mean'].values[0]
+
+            for dataset in subset_all['dataset'].unique():
+                row = subset_all[(subset_all['dataset'] == dataset) &
+                                 (subset_all['num_nodes'] == num_nodes)]
+                if row.empty:
+                    continue
+
+                lat = row['latency_mean'].values[0]
+                thr = row['txs_sec_mean'].values[0]
+
+                if dataset == 'Pro Simplex':
+                    print(f"{dataset}: Latency={lat:.4f} sec, Throughput={thr:.2f} tx/s")
+                else:
+                    lat_diff = ((lat - pro_lat) / pro_lat) * 100
+                    thr_diff = ((thr - pro_thr) / pro_thr) * 100
+                    print(f"{dataset}: Latency={lat:.4f} sec "
+                          f"({lat_diff:+.2f}% vs Pro Simplex), "
+                          f"Throughput={thr:.2f} tx/s "
+                          f"({thr_diff:+.2f}% vs Pro Simplex)")
+
         # ---------- LATENCY PLOT ----------
         plt.figure(figsize=(8, 6))
         ax_lat = plt.gca()
@@ -55,12 +90,10 @@ for tx_size in tx_sizes:
             if subset.empty:
                 continue
             all_nodes_lat.update(subset['num_nodes'].unique())
-            ax_lat.errorbar(
+            ax_lat.plot(
                 subset['num_nodes'].to_numpy(),
                 subset['latency_mean'].to_numpy(),
-                yerr=subset['latency_std'].to_numpy(),
                 marker='o',
-                capsize=4,
                 label=dataset
             )
 
@@ -73,9 +106,13 @@ for tx_size in tx_sizes:
         ax_lat.set_title(f'{txs} txs of {tx_size} bytes', fontsize=16)
         ax_lat.tick_params(axis='both', which='major', labelsize=16)
         ax_lat.tick_params(axis='both', which='minor', labelsize=16)
-        ax_lat.set_xticks(sorted(all_nodes_lat))
+
+        xticks = sorted(all_nodes_lat)
+        ax_lat.set_xticks(xticks)
+        xtick_labels = [str(x) if x != 7 else "" for x in xticks]
+        ax_lat.set_xticklabels(xtick_labels)
+
         ax_lat.grid(True)
-        ax_lat.legend()
         plt.tight_layout()
         plt.savefig(f"latency_{txs}_{tx_size}.pdf", dpi=600, bbox_inches="tight")
         plt.close()
@@ -92,12 +129,10 @@ for tx_size in tx_sizes:
             if subset.empty:
                 continue
             all_nodes_txs.update(subset['num_nodes'].unique())
-            ax_txs.errorbar(
+            ax_txs.plot(
                 subset['num_nodes'].to_numpy(),
                 subset['txs_sec_mean'].to_numpy(),
-                yerr=subset['txs_sec_std'].to_numpy(),
                 marker='o',
-                capsize=4,
                 label=dataset
             )
 
@@ -110,9 +145,13 @@ for tx_size in tx_sizes:
         ax_txs.set_title(f'{txs} txs of {tx_size} bytes', fontsize=16)
         ax_txs.tick_params(axis='both', which='major', labelsize=16)
         ax_txs.tick_params(axis='both', which='minor', labelsize=16)
-        ax_txs.set_xticks(sorted(all_nodes_txs))
+
+        xticks = sorted(all_nodes_txs)
+        ax_txs.set_xticks(xticks)
+        xtick_labels = [str(x) if x != 7 else "" for x in xticks]
+        ax_txs.set_xticklabels(xtick_labels)
+
         ax_txs.grid(True)
-        ax_txs.legend()
         plt.tight_layout()
         plt.savefig(f"throughput_{txs}_{tx_size}.pdf", dpi=600, bbox_inches="tight")
         plt.close()

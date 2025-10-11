@@ -94,6 +94,7 @@ impl Protocol for PracticalSimplex {
             if node.id != self.environment.my_node.id {
                 let address = format!("{}:{}", node.host, node.port);
                 let mut stream = TcpStream::connect(address).await.expect(&format!("[Node {}] Failed to connect to Node {}", self.environment.my_node.id, node.id));
+                stream.set_nodelay(true).unwrap();
                 let node_id_bytes = self.environment.my_node.id.to_be_bytes();
                 let nonce = generate_nonce();
                 let signature = self.private_key.sign(&nonce);
@@ -107,6 +108,7 @@ impl Protocol for PracticalSimplex {
         let mut accepted = 0;
         while accepted != self.environment.nodes.len() - 1 {
             let (mut stream, _) = listener.accept().await.expect(&format!("[Node {}] Failed accepting incoming connection", self.environment.my_node.id));
+            stream.set_nodelay(true).unwrap();
             let mut id_buf = [0u8; 4];
             stream.read_exact(&mut id_buf).await.expect(&format!("[Node {}] Failed reading during handshake", self.environment.my_node.id));
             let claimed_id = u32::from_be_bytes(id_buf);
