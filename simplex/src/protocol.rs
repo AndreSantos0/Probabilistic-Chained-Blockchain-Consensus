@@ -30,7 +30,7 @@ pub const FINALIZED_BLOCKS_FILENAME: &str = "FinalizedBlocks_";
 
 pub trait Protocol {
 
-    const EXECUTION_TIME_SECS: u64 = 120;
+    const EXECUTION_TIME_SECS: u64 = 60;
     const MESSAGE_CHANNEL_SIZE: usize = 1000;
     const RESET_TIMER_CHANNEL_SIZE: usize = 100;
     const SOCKET_BINDING_DELAY: u64 = 5;
@@ -124,23 +124,26 @@ pub trait Protocol {
 
     async fn start_finalize_task(&self, mut finalize_receiver: Receiver<Vec<NotarizedBlock>>) {
         let my_node_id = self.get_environment().my_node.id;
+        let store_results = self.get_environment().store_results;
         tokio::spawn(async move {
             loop {
                 if let Some(blocks) = finalize_receiver.recv().await {
-                    let mut file = OpenOptions::new()
-                        .write(true)
-                        .create(true)
-                        .append(true)
-                        .open(format!("{}{}.ndjson", FINALIZED_BLOCKS_FILENAME, my_node_id))
-                        .await
-                        .expect("Could not open blockchain file");
+                    if store_results {
+                        let mut file = OpenOptions::new()
+                            .write(true)
+                            .create(true)
+                            .append(true)
+                            .open(format!("{}{}.ndjson", FINALIZED_BLOCKS_FILENAME, my_node_id))
+                            .await
+                            .expect("Could not open blockchain file");
 
-                    let block_data = blocks.iter().map(|notarized| {
-                        to_string(notarized).expect("Failed to serialize block")+ "\n"
-                    })
-                    .collect::<Vec<String>>()
-                    .join("");
-                    file.write_all(block_data.as_bytes()).await.expect("Error writing blocks to file");
+                        let block_data = blocks.iter().map(|notarized| {
+                            to_string(notarized).expect("Failed to serialize block")+ "\n"
+                        })
+                        .collect::<Vec<String>>()
+                        .join("");
+                        file.write_all(block_data.as_bytes()).await.expect("Error writing blocks to file");
+                    }
                 }
             }
         });
