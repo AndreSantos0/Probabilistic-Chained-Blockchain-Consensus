@@ -22,6 +22,7 @@ const NODES_FILENAME: &str = "./shared/nodes.csv";
 const PUBLIC_KEYS_FILENAME: &str = "./shared/public_keys.toml";
 const PUBLIC_KEYS_FILE_INDEX: &str = "public_key";
 const PRIVATE_KEY_ENV: &str = "PRIVATE_KEY_";
+const NO_STORE_ARG: &str = "no-store";
 
 
 pub fn get_environment(args: Vec<String>) -> Result<Environment, Box<dyn Error>> {
@@ -33,6 +34,7 @@ pub fn get_environment(args: Vec<String>) -> Result<Environment, Box<dyn Error>>
     let transaction_size = args[TRANSACTION_SIZE_ARG_POS].parse::<usize>()?;
     let n_transactions = args[N_TRANSACTIONS_ARG_POS].parse::<usize>()?;
     let test_flag = args.iter().any(|arg| arg == "test");
+    let store_results = !args.iter().any(|arg| arg == NO_STORE_ARG);
     let nodes = read_nodes_from_csv(NODES_FILENAME)?;
     let my_node = nodes.iter().find(|node| node.id == my_id).ok_or("This process' node was not found")?.clone();
 
@@ -42,6 +44,7 @@ pub fn get_environment(args: Vec<String>) -> Result<Environment, Box<dyn Error>>
         test_flag,
         transaction_size,
         n_transactions,
+        store_results,
     })
 }
 
