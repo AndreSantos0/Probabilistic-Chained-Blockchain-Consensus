@@ -21,6 +21,8 @@ const N_TRANSACTIONS_ARG_POS: usize = 3;
 const NODES_FILENAME: &str = "./shared/nodes.csv";
 const PUBLIC_KEYS_FILENAME: &str = "./shared/public_keys.toml";
 const PUBLIC_KEYS_FILE_INDEX: &str = "public_key";
+const PRIVATE_KEYS_FILENAME: &str = "./shared/private_keys.toml";
+const PRIVATE_KEYS_FILE_INDEX: &str = "private_key";
 const PRIVATE_KEY_ENV: &str = "PRIVATE_KEY_";
 
 
@@ -77,7 +79,20 @@ pub fn get_public_keys() -> HashMap<u32, PublicKey> {
 }
 
 pub fn get_private_key(node_id: u32) -> Keypair {
-    let encoded_key = env::var(format!("{}{}", PRIVATE_KEY_ENV, node_id)).expect("Private key environment variable is not set");
+    if let Ok(encoded_key) = env::var(format!("{}{}", PRIVATE_KEY_ENV, node_id)) {
+        let key_data = general_purpose::STANDARD.decode(encoded_key).expect("Failed to decode base64 private key");
+        return Keypair::from_bytes(&key_data).expect("Failed to parse private key");
+    }
+
+    let content = fs::read_to_string(PRIVATE_KEYS_FILENAME).expect("Failed to read private key file");
+    let data: Value = content.parse::<Value>().expect("Failed to parse private key TOML data");
+    let data_table = data.as_table().expect("Expected private key TOML data to be a table");
+    let node_key = node_id.to_string();
+    let encoded_key = data_table
+        .get(&node_key)
+        .and_then(|entry| entry.get(PRIVATE_KEYS_FILE_INDEX))
+        .and_then(|value| value.as_str())
+        .unwrap_or_else(|| panic!("Private key not found for node {}", node_id));
     let key_data = general_purpose::STANDARD.decode(encoded_key).expect("Failed to decode base64 private key");
     Keypair::from_bytes(&key_data).expect("Failed to parse private key")
 }
