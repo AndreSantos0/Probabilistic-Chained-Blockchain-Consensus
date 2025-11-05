@@ -1,13 +1,17 @@
-use bincode::{serialize};
-use crate::message::{StreamletMessage};
+use std::sync::Arc;
+
+use bincode::serialize;
+use crate::message::StreamletMessage;
 use ed25519_dalek::{Keypair, Signer};
-use log::{error};
+use log::{error, warn};
 use rand::rngs::OsRng;
 use rand::TryRngCore;
-use tokio::io::{AsyncWriteExt};
-use tokio::net::{TcpStream};
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
+use tokio::sync::mpsc::{self, error::TrySendError, Sender};
 
 pub const NONCE_BYTES_LENGTH: usize = 32;
+const OUTBOUND_CHANNEL_SIZE: usize = 64;
 
 
 pub fn generate_nonce() -> [u8; NONCE_BYTES_LENGTH] {
@@ -16,9 +20,22 @@ pub fn generate_nonce() -> [u8; NONCE_BYTES_LENGTH] {
     nonce
 }
 
-pub async fn broadcast(
+pub fn spawn_writer(mut stream: TcpStream) -> Sender<Arc<[u8]>> {
+    let (sender, mut receiver) = mpsc::channel::<Arc<[u8]>>(OUTBOUND_CHANNEL_SIZE);
+    tokio::spawn(async move {
+        while let Some(buffer) = receiver.recv().await {
+            if let Err(e) = stream.write_all(&buffer).await {
+                error!("Failed to send message to connection: {}", e);
+                break;
+            }
+        }
+    });
+    sender
+}
+
+pub fn broadcast(
     private_key: &Keypair,
-    connections: &mut Vec<Option<TcpStream>>,
+    connections: &mut Vec<Option<Sender<Arc<[u8]>>>>,
     message: &StreamletMessage,
     enable_crypto: bool,
 ) {
@@ -44,18 +61,24 @@ pub async fn broadcast(
         buffer.extend(sig.as_ref());
     }
 
-    let mut failed_indices = vec![];
+    let shared_buffer: Arc<[u8]> = buffer.into();
 
-    for (i, stream) in connections.iter_mut().enumerate() {
-        if let Some(stream) = stream {
-            if let Err(e) = stream.write_all(&buffer).await {
-                error!("Failed to send message to connection {}: {}", i, e);
-                failed_indices.push(i);
+    for (index, slot) in connections.iter_mut().enumerate() {
+        let Some(sender) = slot else { continue };
+        if sender.is_closed() {
+            *slot = None;
+            continue;
+        }
+
+        match sender.try_send(shared_buffer.clone()) {
+            Ok(_) => {}
+            Err(TrySendError::Full(_)) => {
+                warn!("Outbound channel to connection {} is full; dropping message", index);
+            }
+            Err(TrySendError::Closed(_)) => {
+                *slot = None;
+                error!("Outbound channel to connection {} is closed", index);
             }
         }
-    }
-
-    for i in failed_indices.into_iter().rev() {
-        connections[i] = None;
     }
 }

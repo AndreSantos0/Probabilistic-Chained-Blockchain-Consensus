@@ -20,7 +20,7 @@ use tokio::time::sleep;
 use shared::initializer::get_private_key;
 use crate::block::{Epoch, NodeId, StreamletBlock};
 use crate::blockchain::Blockchain;
-use crate::connection::{broadcast, generate_nonce};
+use crate::connection::{broadcast, generate_nonce, spawn_writer};
 
 pub struct Latency {
     pub start: SystemTime,
@@ -98,7 +98,7 @@ impl Streamlet {
         message_queue_sender: &Sender<(NodeId, StreamletMessage)>,
         dispatcher_queue_sender: &Sender<StreamletMessage>,
         listener: TcpListener
-    ) -> Vec<Option<TcpStream>> {
+    ) -> Vec<Option<Sender<Arc<[u8]>>>> {
         let mut connections = Vec::new();
         for node in self.environment.nodes.iter() {
             if node.id != self.environment.my_node.id {
@@ -110,7 +110,8 @@ impl Streamlet {
                 stream.write_all(&node_id_bytes).await.expect(&format!("[Node {}] Failed writing during handshake to Node {}", self.environment.my_node.id, node.id));
                 stream.write_all(&nonce).await.expect(&format!("[Node {}] Failed writing during handshake to Node {}", self.environment.my_node.id, node.id));
                 stream.write_all((&signature).as_ref()).await.expect(&format!("[Node {}] Failed writing during handshake to Node {}", self.environment.my_node.id, node.id));
-                connections.push(Some(stream));
+                let sender = spawn_writer(stream);
+                connections.push(Some(sender));
             }
         }
 
@@ -153,7 +154,7 @@ impl Streamlet {
         &self,
         message_queue_sender: &Sender<(NodeId, StreamletMessage)>,
         mut dispatcher_queue_receiver: Receiver<StreamletMessage>,
-        mut connections: Vec<Option<TcpStream>>
+        mut connections: Vec<Option<Sender<Arc<[u8]>>>>
     ) {
         let my_node_id = self.environment.my_node.id;
         let private_key = get_private_key(my_node_id);
@@ -174,15 +175,15 @@ impl Streamlet {
         private_key: &Keypair,
         enable_crypto: bool,
         my_node_id: u32,
-        connections: &mut Vec<Option<TcpStream>>
+        connections: &mut Vec<Option<Sender<Arc<[u8]>>>>
     ) {
         match message {
             StreamletMessage::Base(_) => {
-                broadcast(private_key, connections, &message, enable_crypto).await;
+                broadcast(private_key, connections, &message, enable_crypto);
                 let _ = message_queue_sender.send((my_node_id, message)).await;
             }
             StreamletMessage::Echo(_) => {
-                broadcast(private_key, connections, &message, enable_crypto).await;
+                broadcast(private_key, connections, &message, enable_crypto);
             }
         }
     }
