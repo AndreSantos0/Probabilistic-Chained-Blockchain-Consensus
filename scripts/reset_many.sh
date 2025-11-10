@@ -1,20 +1,18 @@
 #!/bin/bash
 
-# Outside
-# scp -oHostKeyAlgorithms=+ssh-rsa -oPubkeyAcceptedAlgorithms=+ssh-rsa "C:/Users/André Santos/.ssh/id_rsa" andresantos@quinta.navigators.di.fc.ul.pt:~/.ssh
-# scp -oHostKeyAlgorithms=+ssh-rsa -oPubkeyAcceptedAlgorithms=+ssh-rsa "C:/Users/André Santos/.ssh/id_rsa.pub" andresantos@quinta.navigators.di.fc.ul.pt:~/.ssh
-# Inside
-# scp ~/.ssh/id_rsa.pub root@s9:~/.ssh/
-# ssh -oHostKeyAlgorithms=+ssh-rsa -oPubkeyAcceptedAlgorithms=+ssh-rsa andresantos@quinta.navigators.di.fc.ul.pt
-# chmod +x config.sh
-# kadeploy3 -e ubuntu-20.04 -f myNodes -s config.sh -k ~/id_rsa.pub
-
 set -e
 
 NODES_FILE="myNodes"
 KEYS_FILE="keys"
 REMOTE_SCRIPT="/tmp/remote_setup.sh"
 SSH_USER="root"
+
+if [[ $# -lt 1 ]]; then
+  echo "Usage: $0 <n_processes>"
+  exit 1
+fi
+
+TOTAL_PROCESSES=$1
 
 echo "📄 Generating remote script..."
 
@@ -35,11 +33,12 @@ SET_KEYS_FILE="$SHARED_DIR/set_keys.env"
 # Clone or pull repo
 if [ ! -d "$REPO_DIR" ]; then
   echo "Cloning repository..."
-  git clone "$REPO_URL"
+  git clone -b main "$REPO_URL"
 else
   echo "Repository exists. Pulling latest changes..."
   cd "$REPO_DIR"
-  git pull origin main || git pull origin master
+  git checkout main
+  git pull origin main
   cd ..
 fi
 
@@ -49,11 +48,6 @@ if ! command -v cargo &> /dev/null; then
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
   source "$HOME/.cargo/env"
 fi
-
-# Install gcc
-echo "🔧 Installing build-essential (GCC)..."
-apt update
-DEBIAN_FRONTEND=noninteractive apt install -y build-essential
 
 # Clean old files
 echo "🧹 Cleaning old shared files..."
@@ -69,10 +63,10 @@ while IFS= read -r line; do
   PUBLIC_KEY=$(echo "$line" | cut -d ':' -f2)
 
   {
-      echo "echo \"[$node_id]\" >> \"\$PUBLIC_KEYS_FILE\""
-      echo "echo \"public_key = \\\"$PUBLIC_KEY\\\"\" >> \"\$PUBLIC_KEYS_FILE\""
-      echo "echo \"\" >> \"\$PUBLIC_KEYS_FILE\""
-      echo "echo \"export PRIVATE_KEY_$node_id=\\\"$PRIVATE_KEY\\\"\" >> \"\$SET_KEYS_FILE\""
+    echo "echo \"[$node_id]\" >> \"\$PUBLIC_KEYS_FILE\""
+    echo "echo \"public_key = \\\"$PUBLIC_KEY\\\"\" >> \"\$PUBLIC_KEYS_FILE\""
+    echo "echo \"\" >> \"\$PUBLIC_KEYS_FILE\""
+    echo "echo \"export PRIVATE_KEY_$node_id=\\\"$PRIVATE_KEY\\\"\" >> \"\$SET_KEYS_FILE\""
   } >> remote_script.sh
 
   ((node_id++))
@@ -81,20 +75,44 @@ done < "$KEYS_FILE"
 # Add node info and build command
 echo "echo 'id,host,port' > \"\$REPO_DIR/shared/nodes.csv\"" >> remote_script.sh
 
+# Read nodes into an array
+nodes=()
+while IFS= read -r line || [[ -n "$line" ]]; do
+  nodes+=("$line")
+done < "$NODES_FILE"
+
+NUM_NODES=${#nodes[@]}
+
+if [ $NUM_NODES -eq 0 ]; then
+  echo "❌ No nodes found in $NODES_FILE"
+  exit 1
+fi
+
+BASE=$(( TOTAL_PROCESSES / NUM_NODES ))
+REMAINDER=$(( TOTAL_PROCESSES % NUM_NODES ))
+
 node_id=0
-PORT=8081
-while read -r node; do
+
+for index in "${!nodes[@]}"; do
+  node="${nodes[$index]}"
   ip=$(getent hosts "$node" | awk '{ print $1 }')
   if [ -z "$ip" ]; then
     echo "❌ Could not resolve IP for node: $node"
     exit 1
   fi
 
-  echo "echo \"$node_id,$ip,$PORT\" >> \"\$REPO_DIR/shared/nodes.csv\"" >> remote_script.sh
+  COUNT=$BASE
+  if [ $index -lt $REMAINDER ]; then
+    COUNT=$(( COUNT + 1 ))
+  fi
 
-  ((node_id++))
-  ((PORT++))
-done < "$NODES_FILE"
+  PORT=8081
+  for ((i=0; i<COUNT; i++)); do
+    echo "echo \"$node_id,$ip,$PORT\" >> \"\$REPO_DIR/shared/nodes.csv\"" >> remote_script.sh
+    ((node_id++))
+    ((PORT++))
+  done
+done
 
 # Add build command
 cat << 'EOF' >> remote_script.sh
@@ -110,6 +128,10 @@ chmod +x remote_script.sh
 echo "🚀 Deploying script to nodes..."
 
 while read -r node; do
+  if [ -z "$node" ]; then
+    continue
+  fi
+
   echo "Deploying to node: $node"
   scp ~/.ssh/id_rsa.pub $SSH_USER@"$node":~/.ssh/
   scp remote_script.sh $SSH_USER@"$node":$REMOTE_SCRIPT

@@ -1,14 +1,5 @@
 #!/bin/bash
 
-# Outside
-# scp -oHostKeyAlgorithms=+ssh-rsa -oPubkeyAcceptedAlgorithms=+ssh-rsa "C:/Users/André Santos/.ssh/id_rsa" andresantos@quinta.navigators.di.fc.ul.pt:~/.ssh
-# scp -oHostKeyAlgorithms=+ssh-rsa -oPubkeyAcceptedAlgorithms=+ssh-rsa "C:/Users/André Santos/.ssh/id_rsa.pub" andresantos@quinta.navigators.di.fc.ul.pt:~/.ssh
-# Inside
-# scp ~/.ssh/id_rsa.pub root@s9:~/.ssh/
-# ssh -oHostKeyAlgorithms=+ssh-rsa -oPubkeyAcceptedAlgorithms=+ssh-rsa andresantos@quinta.navigators.di.fc.ul.pt
-# chmod +x config.sh
-# kadeploy3 -e ubuntu-20.04 -f myNodes -s config.sh -k ~/id_rsa.pub
-
 set -e
 
 NODES_FILE="myNodes"
@@ -35,11 +26,12 @@ SET_KEYS_FILE="$SHARED_DIR/set_keys.env"
 # Clone or pull repo
 if [ ! -d "$REPO_DIR" ]; then
   echo "Cloning repository..."
-  git clone "$REPO_URL"
+  git clone -b main "$REPO_URL"
 else
   echo "Repository exists. Pulling latest changes..."
   cd "$REPO_DIR"
-  git pull origin main || git pull origin master
+  git checkout main
+  git pull origin main
   cd ..
 fi
 
@@ -49,11 +41,6 @@ if ! command -v cargo &> /dev/null; then
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
   source "$HOME/.cargo/env"
 fi
-
-# Install gcc
-echo "🔧 Installing build-essential (GCC)..."
-apt update
-DEBIAN_FRONTEND=noninteractive apt install -y build-essential
 
 # Clean old files
 echo "🧹 Cleaning old shared files..."

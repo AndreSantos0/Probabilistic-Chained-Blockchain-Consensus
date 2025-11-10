@@ -11,27 +11,31 @@ LOCAL_RESULTS_DIR="results"
 SHARED_DIR="$REMOTE_DIR/shared"
 SET_KEYS_FILE="$SHARED_DIR/set_keys.env"
 
-if [[ $# -lt 2 ]]; then
-  echo "Usage: $0 <transaction_size> <n_transactions> [test] [prob]"
+if [[ $# -lt 3 ]]; then
+  echo "Usage: $0 <transaction_size> <n_transactions> <epoch_time> [test]"
   exit 1
 fi
 
 transaction_size="$1"
 n_transactions="$2"
-shift 2
+epoch_time="$3"
+shift 3
 
-ARGS=("$transaction_size" "$n_transactions")
+# Validate epoch_time is a valid float
+if ! [[ "$epoch_time" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "Error: epoch_time must be a float64 number."
+  exit 1
+fi
+
+ARGS=("$transaction_size" "$n_transactions" "$epoch_time")
 
 for arg in "$@"; do
   case "$arg" in
     test)
       ARGS+=("test")
       ;;
-    prob)
-      ARGS+=("probabilistic")
-      ;;
     *)
-      echo "Unknown mode: '$arg'. Supported optional modes are 'test' and 'prob'."
+      echo "Unknown mode: '$arg'. Supported optional mode is 'test'."
       exit 1
       ;;
   esac
@@ -59,7 +63,7 @@ while read -r node; do
     cd $REMOTE_DIR || { echo '❌ Repo dir not found'; exit 1; }
     rm -f FinalizedBlocks_$node_id.ndjson
     source \$HOME/.cargo/env
-    cargo run --release --package simplex --bin simplex $node_id ${ARGS[*]} > /tmp/simplex_$node_id.log 2>&1
+    cargo run --release --package streamlet --bin streamlet $node_id ${ARGS[*]} > /tmp/simplex_$node_id.log 2>&1
   " &
 
   pids+=($!)
