@@ -1,28 +1,31 @@
-//use std::collections::VecDeque;
+use std::sync::OnceLock;
+
 use bincode::serialize;
 use crate::domain::transaction::{Transaction};
 
+static GLOBAL_TRANSACTION: OnceLock<Transaction> = OnceLock::new();
 
 pub struct TransactionGenerator {
-    padding: usize,
     transactions_per_block: usize,
-    //pool: VecDeque<Transaction>,
 }
 
 impl TransactionGenerator {
 
     pub fn new(target_size: usize, transactions_per_block: usize) -> Self {
+        GLOBAL_TRANSACTION.get_or_init(|| Self::create_transaction(target_size));
+        TransactionGenerator { transactions_per_block }
+    }
+
+    fn create_transaction(target_size: usize) -> Transaction {
         let mut padding_size = 0;
         loop {
             let tx = Transaction::new(padding_size);
             let size = serialize(&tx).unwrap().len();
             if size >= target_size {
-                break
+                return tx;
             }
             padding_size += 1;
         }
-        //let pool = (0..transactions_per_block * 10000).map(|_| Transaction::new(padding_size)).collect();
-        TransactionGenerator { padding: padding_size, transactions_per_block }
     }
 
     /*
@@ -32,6 +35,9 @@ impl TransactionGenerator {
      */
 
     pub fn generate(&mut self) -> Vec<Transaction> {
-        (0..self.transactions_per_block).map(|_| Transaction::new(self.padding)).collect()
+        let transaction = GLOBAL_TRANSACTION
+            .get()
+            .expect("Global transaction should be initialized in TransactionGenerator::new");
+        vec![transaction.clone(); self.transactions_per_block]
     }
 }

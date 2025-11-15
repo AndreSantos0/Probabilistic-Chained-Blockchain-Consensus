@@ -20,6 +20,7 @@ use rand::seq::SliceRandom;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::task::JoinSet;
 use shared::domain::transaction::Transaction;
 use shared::initializer::get_private_key;
 
@@ -266,6 +267,7 @@ impl Protocol for ProbabilisticSimplex {
         }
     }
 
+
     fn create_proposal(&self, block: SimplexBlock) -> Dispatch {
         let (header, signatures) = self.last_notarized();
         Dispatch::ProbPropose(block, header.iteration, signatures.clone())
@@ -482,44 +484,13 @@ impl ProbabilisticSimplex {
                         }
                     }
                     ProbabilisticSimplexMessage::Reply(reply) => {
-                        if reply.blocks.is_empty() { continue }
-                        for notarized in &reply.blocks {
-                            let transactions_data = match serialize(&notarized.transactions) {
-                                Ok(data) => data,
-                                Err(_) => {
-                                    error!("[Node {}] Failed to serialize block transactions during reply", my_node_id);
-                                    continue;
-                                }
-                            };
-                            let hashed_transactions = Sha256::digest(&transactions_data).to_vec();
-                            if hashed_transactions != notarized.header.transactions { continue }
-                            if notarized.signatures.len() >= probabilistic_quorum_size {
-                                if enable_crypto {
-                                    let serialized_message = match serialize(&notarized.header) {
-                                        Ok(msg) => msg,
-                                        Err(_) => {
-                                            error!("[Node {}] Failed to serialize vote signature header", my_node_id);
-                                            continue;
-                                        }
-                                    };
-
-                                    let messages: Vec<&[u8]> = (0..notarized.signatures.len()).map(|_| serialized_message.as_slice()).collect();
-                                    let signatures: Vec<Signature>  = notarized.signatures.iter().map(
-                                        |vote_signature| Signature::from_bytes(vote_signature.signature.as_ref()).unwrap()
-                                    ).collect();
-                                    let mut keys = Vec::with_capacity(notarized.signatures.len());
-                                    for vote_signature in &notarized.signatures {
-                                        match public_keys.get(&vote_signature.node) {
-                                            Some(key) => keys.push(*key),
-                                            None => continue,
-                                        }
-                                    }
-
-                                    if !verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok() {
-                                        continue;
-                                    }
-                                }
-                            } else { continue }
+                        if !reply.blocks.is_empty() {
+                            Self::verify_reply_blocks(
+                                reply.clone(),
+                                public_keys,
+                                probabilistic_quorum_size,
+                                my_node_id,
+                            ).await;
                         }
                     }
                     _ => {}
@@ -527,6 +498,85 @@ impl ProbabilisticSimplex {
             }
             let _ = message_queue_sender.send((node_id, message)).await;
         }
+    }
+
+    async fn verify_reply_blocks(
+        reply: Reply,
+        public_keys: &HashMap<NodeId, PublicKey>,
+        quorum_size: usize,
+        my_node_id: NodeId,
+    ) {
+        let mut join_set = JoinSet::new();
+
+        for (index, notarized) in reply.blocks.into_iter().enumerate() {
+            if notarized.signatures.len() < quorum_size {
+                continue;
+            }
+
+            let mut keys = Vec::with_capacity(notarized.signatures.len());
+            let mut missing_key = false;
+            for vote_signature in &notarized.signatures {
+                match public_keys.get(&vote_signature.node) {
+                    Some(key) => keys.push(*key),
+                    None => {
+                        error!(
+                            "[Node {}] Missing public key for node {} while verifying reply block {}",
+                            my_node_id, vote_signature.node, index
+                        );
+                        missing_key = true;
+                        break;
+                    }
+                }
+            }
+
+            if missing_key {
+                continue;
+            }
+
+            join_set.spawn_blocking(move || Self::verify_notarized_block_parallel(notarized, keys));
+        }
+
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok(Ok(true)) => {}
+                Ok(Ok(false)) => {}
+                Ok(Err(err)) => error!("[Node {}] {}", my_node_id, err),
+                Err(join_err) => error!(
+                    "[Node {}] Reply verification task failed: {}",
+                    my_node_id, join_err
+                ),
+            }
+        }
+    }
+
+    fn verify_notarized_block_parallel(
+        notarized: NotarizedBlock,
+        keys: Vec<PublicKey>,
+    ) -> Result<bool, String> {
+        let transactions_data = serialize(&notarized.transactions)
+            .map_err(|_| "Failed to serialize block transactions during reply".to_string())?;
+        let hashed_transactions = Sha256::digest(&transactions_data).to_vec();
+        if hashed_transactions != notarized.header.transactions {
+            return Ok(false);
+        }
+
+        if keys.len() != notarized.signatures.len() {
+            return Ok(false);
+        }
+
+        let serialized_message = serialize(&notarized.header)
+            .map_err(|_| "Failed to serialize vote signature header".to_string())?;
+        let messages = vec![serialized_message.as_slice(); keys.len()];
+        let signatures = notarized
+            .signatures
+            .iter()
+            .map(|vote_signature| {
+                Signature::from_bytes(vote_signature.signature.as_ref())
+                    .map_err(|_| "Failed to parse vote signature".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(verify_batch(&messages[..], &signatures[..], &keys[..]).is_ok())
     }
 
     async fn handle_propose(

@@ -19,7 +19,16 @@ async fn main() {
     } else {
         log::set_max_level(log::LevelFilter::Off);
     }
-    let epoch_time = args[4].parse::<f64>().unwrap();
+    const EPOCH_ARG_INDEX: usize = 4;
+    if args.len() <= EPOCH_ARG_INDEX {
+        eprintln!("Usage: streamlet <node_id> <transaction_size> <n_transactions> <epoch_time> [options]");
+        std::process::exit(1);
+    }
+
+    let epoch_time = args[EPOCH_ARG_INDEX].parse::<f64>().unwrap_or_else(|err| {
+        eprintln!("Failed to parse epoch_time ({}): {}", args[EPOCH_ARG_INDEX], err);
+        std::process::exit(1);
+    });
     match get_environment(args) {
         Ok(env) => {
             info!("Successfully read environment: {:?}", env);

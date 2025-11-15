@@ -1,0 +1,4 @@
+python3 run_all_nodes.py --transaction-size 242 --n-transactions 10000 --no-store-results
+
+
+python3 run_all_nodes_flamegraph.py --transaction-size 242 --n-transactions 10000 --epoch-time 1.5 --no-store-results
